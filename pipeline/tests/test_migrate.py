@@ -1,17 +1,14 @@
 """Tests for pipeline.migrate.
 
 The database test needs a real Postgres in TEST_DATABASE_URL (CI provides one) and is skipped
-otherwise. It works inside a throwaway schema, so it never touches existing tables.
+otherwise. It works inside a throwaway schema (the test_conn fixture in conftest.py), so it
+never touches existing tables.
 """
 
-import os
-import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
 import pytest
-from psycopg import sql
 
 from pipeline.migrate import MIGRATIONS_DIR, apply_migrations, migration_files
 
@@ -41,24 +38,6 @@ def test_migration_files_are_sorted(tmp_path: Path) -> None:
 
 def test_init_migration_exists() -> None:
     assert (MIGRATIONS_DIR / "0001_init.sql") in migration_files()
-
-
-@pytest.fixture
-def test_conn() -> Iterator[psycopg.Connection[tuple[object, ...]]]:
-    """A connection whose search_path points at a fresh schema, dropped afterwards."""
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("TEST_DATABASE_URL is not set")
-
-    schema = f"migrate_test_{uuid.uuid4().hex[:8]}"
-    with psycopg.connect(url, autocommit=True) as admin:
-        admin.execute(sql.SQL("create schema {}").format(sql.Identifier(schema)))
-    try:
-        with psycopg.connect(url, autocommit=True, options=f"-c search_path={schema}") as conn:
-            yield conn
-    finally:
-        with psycopg.connect(url, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop schema {} cascade").format(sql.Identifier(schema)))
 
 
 def test_migrate_twice_is_safe(test_conn: psycopg.Connection[tuple[object, ...]]) -> None:

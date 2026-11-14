@@ -1,0 +1,229 @@
+# Pages the agent checks. Loaded and validated by pipeline/nodes/load_sources.py.
+#
+# Fields (see pipeline/models.py -> Source):
+#   key               unique lowercase id, letters/digits/dashes (e.g. "turkiye-burslari")
+#   name              human-friendly name
+#   url               must start with https:// and be unique
+#   program_key       groups pages about the same program (two pages can share one)
+#   country           ISO-style code: TR, DE, IT, PK, EU, ...
+#   type              official (the real owner, default) | lead (only points to the owner)
+#   opportunity_type  scholarship | admission | entry_test
+#   location          abroad | pakistan
+#   render_js         true if the page needs a browser to show its content (default false)
+#   is_pdf            true if the url is a PDF file (default false)
+#   active            false = keep it listed but skip it for now (default true)
+#   note              optional free text
+#
+# Example: adding one Erasmus Mundus program page (copy, uncomment, fix the url):
+#
+#   - key: emjmd-example-programme
+#     name: Example Erasmus Mundus Joint Master
+#     url: https://www.example-emjm.eu/admissions/
+#     program_key: emjmd-example-programme
+#     country: EU
+#     opportunity_type: scholarship
+#     location: abroad
+#     note: Found via the Erasmus Mundus catalogue
+
+sources:
+  # ---------- Abroad ----------
+  - key: turkiye-burslari
+    name: Türkiye Bursları
+    url: https://www.turkiyeburslari.gov.tr/
+    program_key: turkiye-burslari
+    country: TR
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: erasmus-mundus-catalogue
+    name: Erasmus Mundus catalogue
+    url: https://www.eacea.ec.europa.eu/scholarships/erasmus-mundus-catalogue_en
+    program_key: erasmus-mundus
+    country: EU
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: daad-database
+    name: DAAD scholarship database
+    url: https://www2.daad.de/deutschland/stipendium/datenbank/en/21148-scholarship-database/
+    program_key: daad
+    country: DE
+    opportunity_type: scholarship
+    location: abroad
+    render_js: true
+    note: The 148 results are loaded by JavaScript from api.daad.de; plain HTML has none
+
+  - key: stipendium-hungaricum-hec
+    name: Stipendium Hungaricum (HEC page)
+    url: https://www.hec.gov.pk/english/scholarshipsgrants/lao/SHSP/Pages/default.aspx
+    program_key: stipendium-hungaricum
+    country: HU
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: stipendium-hungaricum
+    name: Stipendium Hungaricum
+    url: https://stipendiumhungaricum.hu/
+    program_key: stipendium-hungaricum
+    country: HU
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: maeci-italy
+    name: Italian Government (MAECI)
+    url: https://studyinitaly.esteri.it/ListaBandi
+    program_key: maeci
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: polimi-merit
+    name: Politecnico di Milano merit scholarships
+    url: https://www.polimi.it/en/international-prospective-students/laurea-magistrale-programmes-equivalent-to-master-of-science/scholarships/merit-based-scholarships/
+    program_key: polimi-merit
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: unipd-maeci
+    name: "University of Padova: MAECI info"
+    url: https://www.unipd.it/en/borse-studio-maeci
+    program_key: maeci
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: kaust-timeline
+    name: KAUST admissions timeline
+    url: https://admissions.kaust.edu.sa/how-to-apply/admission-timelines
+    program_key: kaust
+    country: SA
+    opportunity_type: scholarship
+    location: abroad
+
+  - key: unibo-study-grants
+    name: University of Bologna study grants
+    url: https://www.unibo.it/en/services-and-opportunities/study-grants-and-subsidies
+    program_key: unibo-study-grants
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+    active: false
+    note: confirm URL
+
+  - key: ergo-dsu
+    name: ER.GO DSU (Emilia-Romagna)
+    url: https://www.er-go.it/
+    program_key: ergo-dsu
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+    active: false
+    note: Phase 2
+
+  - key: esu-padova-dsu
+    name: ESU Padova DSU
+    url: https://www.esu.pd.it/
+    program_key: esu-padova-dsu
+    country: IT
+    opportunity_type: scholarship
+    location: abroad
+    active: false
+    note: Phase 2
+
+  # ---------- Pakistan ----------
+  - key: pieas-scholarships
+    name: PIEAS scholarships and fellowships
+    url: https://pieas.edu.pk/scholarships/
+    program_key: pieas-scholarships
+    country: PK
+    opportunity_type: scholarship
+    location: pakistan
+
+  - key: giki-graduate
+    name: GIKI graduate admissions
+    url: https://giki.edu.pk/admissions/admissions-graduate/how-to-apply/
+    program_key: giki-graduate
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+
+  - key: nust-pg
+    name: NUST postgraduate admissions
+    url: https://pgadmission.nust.edu.pk/
+    program_key: nust-pg
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+
+  - key: fast-isb-announcements
+    name: FAST Islamabad announcements
+    url: https://isb.nu.edu.pk/Announcements.php
+    program_key: fast-nu
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+
+  - key: fast-admissions-faq
+    name: FAST admission tests and eligibility
+    url: https://www.nu.edu.pk/Admissions/FAQ
+    program_key: fast-nu
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+
+  - key: iba-admissions
+    name: IBA Karachi admissions
+    url: https://admissions.iba.edu.pk/
+    program_key: iba-karachi
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+
+  - key: comsats-admissions
+    name: COMSATS admissions
+    url: https://admissions.comsats.edu.pk/
+    program_key: comsats
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+    render_js: true
+    note: JavaScript-only app; the HTML is an empty <div id="root">
+
+  - key: hec-hat-calendar
+    name: HEC test calendar (HAT)
+    url: https://www.hec.gov.pk/english/services/students/etc/Pages/Test-Calendar.aspx
+    program_key: hec-hat
+    country: PK
+    opportunity_type: entry_test
+    location: pakistan
+
+  - key: qau
+    name: Quaid-i-Azam University
+    url: https://qau.edu.pk/
+    program_key: qau
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+    active: false
+    note: confirm URL
+
+  - key: sukkur-iba
+    name: Sukkur IBA admissions
+    url: https://www.iba-suk.edu.pk/
+    program_key: sukkur-iba
+    country: PK
+    opportunity_type: admission
+    location: pakistan
+    active: false
+    note: confirm URL
+
+  - key: hec-scholarships
+    name: HEC scholarships
+    url: https://www.hec.gov.pk/english/scholarshipsgrants/Pages/default.aspx
+    program_key: hec-scholarships
+    country: PK
+    opportunity_type: scholarship
+    location: pakistan
+    active: false
+    note: confirm URL
