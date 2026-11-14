@@ -35,7 +35,7 @@ def entry(key: str = "example", url: str = "https://example.edu.pk/") -> str:
 
 def test_real_sources_load() -> None:
     sources = load_sources(REAL_SOURCES, include_inactive=True)
-    assert len(sources) == 23
+    assert len(sources) == 24
 
 
 def test_real_sources_keys_and_urls_are_unique() -> None:
@@ -63,8 +63,9 @@ def test_real_sources_inactive_filtered_by_default() -> None:
         "qau",
         "sukkur-iba",
         "hec-scholarships",
+        "nust-pg",
     }
-    assert len(active) == len(every) - 6
+    assert len(active) == len(every) - 7
 
 
 # ---------- Defaults and validation ----------
@@ -78,6 +79,7 @@ def test_defaults_are_applied(tmp_path: Path) -> None:
     assert source.location is Location.PAKISTAN
     assert source.render_js is False
     assert source.is_pdf is False
+    assert source.include_links is False
     assert source.active is True
     assert source.note is None
 

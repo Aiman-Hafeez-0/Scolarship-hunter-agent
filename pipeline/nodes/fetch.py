@@ -14,7 +14,15 @@ from pipeline.config import Settings
 from pipeline.models import FetchResult, FetchStatus, Source
 from pipeline.ratelimit import DomainRateLimiter, domain_of
 from pipeline.robots import RobotsChecker
-from pipeline.text import content_hash, html_to_text, looks_like_pdf, normalize, pdf_to_text
+from pipeline.text import (
+    append_links,
+    content_hash,
+    extract_links,
+    html_to_text,
+    looks_like_pdf,
+    normalize,
+    pdf_to_text,
+)
 
 MIN_TEXT_CHARS = 50
 MAX_REDIRECTS = 5
@@ -97,12 +105,10 @@ async def _fetch(
             error=f"HTTP {response.status_code}",
         )
 
-    if looks_like_pdf(content_type, response.content):
-        text = pdf_to_text(response.content)
-    else:
-        text = html_to_text(response.text)
-    text = normalize(text)
+    is_pdf = looks_like_pdf(content_type, response.content)
+    text = normalize(pdf_to_text(response.content) if is_pdf else html_to_text(response.text))
 
+    # Check the length before adding links: a page with only links is still "empty".
     if len(text) < MIN_TEXT_CHARS:
         return FetchResult(
             source,
@@ -111,6 +117,9 @@ async def _fetch(
             content_type=content_type,
             error=f"only {len(text)} characters of text; page may need a browser",
         )
+
+    if source.include_links and not is_pdf:
+        text = append_links(text, extract_links(response.text, url))
 
     return FetchResult(
         source,

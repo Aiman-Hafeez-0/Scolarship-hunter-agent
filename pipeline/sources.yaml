@@ -11,6 +11,8 @@
 #   location          abroad | pakistan
 #   render_js         true if the page needs a browser to show its content (default false)
 #   is_pdf            true if the url is a PDF file (default false)
+#   include_links     true = add the page's link/image URLs to its text, so a renamed file
+#                     (e.g. a new calendar PDF) counts as a change (default false)
 #   active            false = keep it listed but skip it for now (default true)
 #   note              optional free text
 #
@@ -155,6 +157,8 @@ sources:
     country: PK
     opportunity_type: admission
     location: pakistan
+    active: false
+    note: Blocked by Cloudflare bot protection. Check by hand. Do not bypass.
 
   - key: fast-isb-announcements
     name: FAST Islamabad announcements
@@ -197,6 +201,18 @@ sources:
     country: PK
     opportunity_type: entry_test
     location: pakistan
+    include_links: true
+    note: The calendar itself is an image plus a PDF; links are hashed so a new file shows up
+
+  - key: hec-hat-calendar-pdf
+    name: HEC test calendar PDF (HAT)
+    url: https://www.hec.gov.pk/english/services/students/etc/Documents/Test%20Calendar%20for%20Year%202026%20-%20Revsied%20on%2025.08.2026.pdf
+    program_key: hec-hat
+    country: PK
+    opportunity_type: entry_test
+    location: pakistan
+    is_pdf: true
+    note: URL changes after each revision; update when hec-hat-calendar shows changed
 
   - key: qau
     name: Quaid-i-Azam University

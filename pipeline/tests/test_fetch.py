@@ -146,6 +146,63 @@ async def test_redirect_target_is_checked_against_robots(
     assert not target.called
 
 
+def _calendar_page(image_name: str) -> str:
+    return PAGE_HTML.replace(
+        "</body>", f'<img src="/images/{image_name}"><a href="/docs/calendar.pdf">PDF</a></body>'
+    )
+
+
+async def test_include_links_appends_urls(mock_http: respx.MockRouter, settings: Settings) -> None:
+    _allow_robots(mock_http)
+    mock_http.get(PAGE).respond(200, html=_calendar_page("cal-v1.jpg"))
+
+    [result] = await fetch_all([make_source(include_links=True)], settings)
+
+    assert result.status is FetchStatus.OK
+    assert result.text is not None
+    assert result.text.endswith(
+        "Links:\nhttps://example.edu.pk/docs/calendar.pdf\nhttps://example.edu.pk/images/cal-v1.jpg"
+    )
+
+
+async def test_links_not_added_by_default(mock_http: respx.MockRouter, settings: Settings) -> None:
+    _allow_robots(mock_http)
+    mock_http.get(PAGE).respond(200, html=_calendar_page("cal-v1.jpg"))
+
+    [result] = await fetch_all([make_source()], settings)
+
+    assert result.text is not None and "Links:" not in result.text
+
+
+async def test_renamed_file_changes_hash(mock_http: respx.MockRouter, settings: Settings) -> None:
+    _allow_robots(mock_http)
+    mock_http.get(PAGE).mock(
+        side_effect=[
+            httpx.Response(200, html=_calendar_page("cal-v1.jpg")),
+            httpx.Response(200, html=_calendar_page("cal-v2.jpg")),
+        ]
+    )
+    source = make_source(include_links=True)
+
+    [first] = await fetch_all([source], settings)
+    [second] = await fetch_all([source], settings)
+
+    assert first.content_hash != second.content_hash
+
+
+async def test_links_do_not_count_toward_min_text(
+    mock_http: respx.MockRouter, settings: Settings
+) -> None:
+    _allow_robots(mock_http)
+    links = "".join(f'<a href="/very/long/path/number/{i}"></a>' for i in range(10))
+    mock_http.get(PAGE).respond(200, html=f"<html><body>{links}</body></html>")
+
+    [result] = await fetch_all([make_source(include_links=True)], settings)
+
+    assert result.status is FetchStatus.FAILED
+    assert result.error is not None and "may need a browser" in result.error
+
+
 async def test_one_bad_source_does_not_stop_others(
     mock_http: respx.MockRouter, settings: Settings
 ) -> None:

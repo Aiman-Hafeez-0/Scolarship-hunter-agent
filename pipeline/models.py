@@ -44,6 +44,8 @@ class Source(BaseModel):
     location: Location
     render_js: bool = False
     is_pdf: bool = False
+    # Add the page's link and image URLs to its text, so a renamed file counts as a change.
+    include_links: bool = False
     active: bool = True
     note: str | None = None
 

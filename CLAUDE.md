@@ -34,6 +34,9 @@ The owner is a beginner: explain what you do in simple words, keep code clean, t
 ### Secrets
 - Secrets live only in `.env`, which is never committed. Add new keys to `.env.example` (empty).
 
+### Git
+- Never commit or push. The owner makes every git commit; leave changes in the working tree.
+
 ### Quality
 - Every new module gets tests.
 - Before saying a task is done, run and pass:
