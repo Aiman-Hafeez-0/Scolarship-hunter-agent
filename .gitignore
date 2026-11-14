@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Virtual environments
+.venv/
+venv/
+
+# Python / tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local data (downloaded pages, PDFs, outputs)
+data/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
