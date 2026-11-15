@@ -1,0 +1,21 @@
+{
+  "source": "kaust-timeline",
+  "notes": "Two rounds in a table; each date is on the line after its label. 'These dates are tentative'. Opening, decisions and semester starts are optional.",
+  "items": [
+    {
+      "name": "KAUST Graduate Admission 2026-2027",
+      "funding_type": "unknown",
+      "open_to_pakistan": "unclear",
+      "application_fee": null,
+      "deadlines": [
+        {"label": "Round 1 application deadline", "date": "2026-09-27", "quote": "Round 1 application deadline\n\n27 September 2026"},
+        {"label": "Round 2 application deadline", "date": "2027-01-03", "quote": "Round 2 application deadline\n\n3 January 2027"},
+        {"label": "Round 2 application open", "date": "2026-09-28", "quote": "Round 2 application open\n\n28 September 2026", "optional": true},
+        {"label": "Round 1 decisions released", "date": "2026-11-19", "quote": "Round 1 decisions released\n\n19 November 2026", "optional": true},
+        {"label": "Spring semester starts", "date": "2027-01-17", "quote": "Spring semester starts\n\n17 January 2027", "optional": true},
+        {"label": "Round 2 decisions released", "date": "2027-02-25", "quote": "Round 2 decisions released\n\n25 February 2027", "optional": true},
+        {"label": "Fall semester starts", "date": "2027-08-29", "quote": "Fall semester starts\n\n29 August 2027", "optional": true}
+      ]
+    }
+  ]
+}

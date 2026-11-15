@@ -1,14 +1,38 @@
 """Tests for pipeline.run (the command line)."""
 
+import json
+import uuid
+from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import respx
 
+from pipeline import db
 from pipeline.config import Settings
+from pipeline.graph import SourceOutcome
 from pipeline.models import Change, FetchStatus
-from pipeline.run import SetupError, choose_sources, exit_code, format_summary, run_fetch
-from pipeline.tests.conftest import make_result, make_source
+from pipeline.nodes.extract import extract_page
+from pipeline.nodes.validate import ValidatedScholarship
+from pipeline.profile import ProfileError
+from pipeline.run import (
+    SetupError,
+    choose_sources,
+    exit_code,
+    extraction_report,
+    format_saved_items,
+    format_summary,
+    format_weekly_summary,
+    main,
+    run_extract,
+    run_fetch,
+    run_match,
+    run_profile,
+    run_weekly,
+)
+from pipeline.schemas import DeadlineItem, PageExtraction, ScholarshipExtraction
+from pipeline.tests.conftest import FakeProvider, make_result, make_source
 
 SOURCES_YAML = """
 sources:
@@ -101,3 +125,113 @@ def test_format_summary() -> None:
     assert lines[3].split() == ["broken", "failed", "-", "404", "-", "HTTP", "404"]
     assert lines[4].endswith("...")
     assert lines[-1] == "3 sources: 1 ok, 2 failed"
+
+
+# ---------- extract command ----------
+
+
+def test_extract_requires_dry_run(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as info:
+        main(["extract", "--only", "kaust-timeline"])
+    assert info.value.code == 2
+    assert "add --dry-run" in capsys.readouterr().err
+
+
+def test_extract_needs_database_url(local_settings: Settings) -> None:
+    with pytest.raises(SetupError, match="DATABASE_URL"):
+        run_extract(local_settings, only="good", provider=FakeProvider())
+
+
+def test_extraction_report() -> None:
+    page = PageExtraction(
+        scholarships=[
+            ScholarshipExtraction(
+                name="KAUST Fellowship", opportunity_type="scholarship", location="abroad"
+            )
+        ]
+    )
+    result = extract_page("page text", make_source(), FakeProvider(page))
+    snapshot = db.Snapshot(
+        id=uuid.UUID(int=1), fetched_at=datetime(2026, 11, 14, 9, 0, tzinfo=UTC), text="page text"
+    )
+
+    report = extraction_report(result, snapshot)
+
+    assert report["source"] == "example"
+    assert report["snapshot_fetched_at"] == "2026-11-14T09:00:00+00:00"
+    assert report["page_chars"] == 9
+    assert report["extract_version"] == "extract_v1"
+    assert report["model"] == "fake-model"
+    assert (report["tokens_in"], report["tokens_out"]) == (100, 20)
+    assert report["needs_review"] is False
+    assert report["extraction"]["scholarships"][0]["name"] == "KAUST Fellowship"
+    json.dumps(report)  # everything in the report is plain JSON
+
+
+# ---------- weekly command ----------
+
+
+def _outcome(key: str, **fetch: Any) -> SourceOutcome:
+    fetched = make_result(key, **fetch)
+    return SourceOutcome(source=fetched.source, fetched=fetched)
+
+
+def test_weekly_needs_database_url(local_settings: Settings) -> None:
+    with pytest.raises(SetupError, match="DATABASE_URL"):
+        run_weekly(local_settings, only=None, force=False, provider=FakeProvider())
+
+
+def test_weekly_summary_and_saved_items() -> None:
+    today = date(2026, 11, 15)
+    item = ScholarshipExtraction(
+        name="MS Admission",
+        opportunity_type="admission",
+        location="pakistan",
+        status="open",
+        deadlines=[
+            DeadlineItem(label="Round 1", deadline_date=date(2026, 10, 1), evidence="1 Oct 2026"),
+            DeadlineItem(label="Round 2", deadline_date=date(2027, 1, 15), evidence="15 Jan 2027",
+                         time_and_timezone="23:59 PKT"),
+        ],
+    )  # fmt: skip
+    flagged = ValidatedScholarship(item=item)
+    flagged.flag("requirements[0] quote not found on page (score 40); value dropped")
+
+    saved = _outcome("nust-pg", change=Change.CHANGED)
+    saved.extracted = extract_page("text", saved.source, FakeProvider(PageExtraction()))
+    saved.items, saved.saved = [flagged], 1
+    unchanged = _outcome("kaust", change=Change.UNCHANGED)
+    broken = _outcome("broken", status=FetchStatus.FAILED, error="HTTP 404")
+
+    summary = format_weekly_summary([saved, unchanged, broken])
+    lines = summary.splitlines()
+    assert lines[0].split() == ["key", "fetch", "change", "items", "review", "tokens", "note"]
+    assert lines[2].split() == ["nust-pg", "ok", "changed", "1", "1", "120"]
+    assert lines[3].split() == ["kaust", "ok", "unchanged", "-", "-", "-"]
+    assert lines[4].split() == ["broken", "failed", "-", "-", "-", "-", "HTTP", "404"]
+    assert "Sources changed:      1" in summary
+    assert "Items saved:          1" in summary
+    assert "Items needing review: 1" in summary
+    assert "Tokens used:          120 (100 in, 20 out)" in summary
+
+    assert format_saved_items([saved, unchanged], today).splitlines() == [
+        "[nust-pg] MS Admission (open)  [NEEDS REVIEW]",
+        "    2026-10-01  Round 1  (passed)",
+        "    2027-01-15  Round 2  (23:59 PKT)",
+        "    review: requirements[0] quote not found on page (score 40); value dropped",
+    ]
+    assert format_saved_items([unchanged]) == "No items saved."
+
+
+# ---------- profile and match commands ----------
+
+
+def test_profile_command_needs_profile_yaml(local_settings: Settings, tmp_path: Path) -> None:
+    missing = local_settings.model_copy(update={"profile_file": tmp_path / "profile.yaml"})
+    with pytest.raises(ProfileError, match="copy profile.example.yaml"):
+        run_profile(missing)
+
+
+def test_match_command_needs_database_url(local_settings: Settings) -> None:
+    with pytest.raises(SetupError, match="DATABASE_URL"):
+        run_match(local_settings)

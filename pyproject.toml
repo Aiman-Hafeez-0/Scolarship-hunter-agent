@@ -5,12 +5,16 @@ description = "Personal AI agent that tracks scholarship, admission and entry-te
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "google-genai>=3.3.0",
+    "groq>=1.7.0",
     "httpx>=0.28.1",
+    "langgraph>=1.2.22",
     "psycopg[binary]>=3.3.9",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.3",
     "pypdf>=7.1.0",
     "pyyaml>=6.0.3",
+    "rapidfuzz>=3.14.6",
     "trafilatura>=2.3.1",
 ]
 

@@ -12,6 +12,7 @@ from psycopg import sql
 
 from pipeline.config import Settings
 from pipeline.models import FetchResult, FetchStatus, Source
+from pipeline.schemas import PageExtraction
 from pipeline.text import content_hash
 
 
@@ -85,3 +86,27 @@ def make_result(
     fields.update(overrides)
     source = make_source(key=key, url=f"https://example.edu.pk/{key}")
     return FetchResult(source, status, **fields)
+
+
+class FakeProvider:
+    """An LLM provider for tests: returns (or raises) the scripted outcomes in order.
+
+    Each outcome is a PageExtraction (returned with 100 tokens in, 20 out) or an exception.
+    Every call is recorded as (page_text, feedback).
+    """
+
+    def __init__(self, *outcomes: PageExtraction | Exception, name: str = "fake-model") -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[str, str | None]] = []
+        self.name = name
+        self.last_model = name
+
+    def extract(
+        self, page_text: str, source: Source, feedback: str | None = None
+    ) -> tuple[PageExtraction, int, int]:
+        self.calls.append((page_text, feedback))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        self.last_model = self.name
+        return outcome, 100, 20

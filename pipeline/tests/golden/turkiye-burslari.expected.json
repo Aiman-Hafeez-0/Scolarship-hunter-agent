@@ -1,0 +1,13 @@
+{
+  "source": "turkiye-burslari",
+  "notes": "Home page, no dates. Applications are free of charge. Coverage appears only as search-filter labels (Monthly Stipend, Accommodation, ...), so funding_type is not scored.",
+  "items": [
+    {
+      "name": "Türkiye Scholarships",
+      "funding_type": null,
+      "open_to_pakistan": "unclear",
+      "application_fee": "free",
+      "deadlines": []
+    }
+  ]
+}

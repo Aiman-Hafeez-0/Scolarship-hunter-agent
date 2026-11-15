@@ -1,0 +1,16 @@
+{
+  "source": "fast-isb-announcements",
+  "notes": "Only one announcement is an opportunity; convocations and homecoming are not. Dates are dd/mm/yyyy. The admission window is last cycle's (Spring 2026).",
+  "items": [
+    {
+      "name": "Admissions Open (MS and PhD) - Spring 2026",
+      "funding_type": "unknown",
+      "open_to_pakistan": "unclear",
+      "application_fee": null,
+      "deadlines": [
+        {"label": "Application deadline", "date": "2026-01-03", "quote": "15/12/2025 - 03/01/2026"},
+        {"label": "Applications open", "date": "2025-12-15", "quote": "15/12/2025 - 03/01/2026", "optional": true}
+      ]
+    }
+  ]
+}

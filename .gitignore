@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Personal profile (copy profile.example.yaml to profile.yaml and fill it in)
+profile.yaml
+
 # Virtual environments
 .venv/
 venv/

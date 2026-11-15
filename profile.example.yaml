@@ -1,0 +1,29 @@
+# Your profile, used to match scholarships to you.
+#
+#   1. Copy this file to profile.yaml (profile.yaml is gitignored, so it is never committed).
+#   2. Replace every example value with your own.
+#   3. Run: uv run python -m pipeline.run profile
+#
+# Leave a value empty (nothing after the colon) if you do not know it or it does not apply.
+
+full_name: Example Student
+email: you@example.com            # the digest and reminders go here; one profile per email
+nationality: PK                   # matching checks "open to Pakistan" for PK
+date_of_birth: 2001-05-10         # YYYY-MM-DD; used for age limits on the deadline date
+degree: BS Computer Science       # the degree you have now (or will have before you start)
+cgpa: 3.20
+cgpa_scale: 4.00                  # 4.00, 5.00, ... (converted to a 4.0 scale for matching)
+english_test:                     # IELTS, TOEFL, PTE or Duolingo; empty if not taken yet
+english_score:                    # e.g. 6.5 (IELTS) or 90 (TOEFL iBT)
+moi_letter: true                  # you have a Medium of Instruction (English) letter
+work_experience_months: 0
+target_fields:                    # matched against each scholarship's fields of study
+  - Artificial Intelligence
+  - Machine Learning
+  - Data Science
+  - Computer Science
+target_intake: Fall 2027
+max_application_fee_eur:          # empty = no cap
+prefer_no_fee: true
+fully_funded_only: true           # partial / tuition-only scholarships then do not match
+reminder_days: [30, 14, 7, 2]     # days before a deadline to send a reminder

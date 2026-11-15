@@ -1,0 +1,24 @@
+{
+  "source": "polimi-merit",
+  "notes": "English page. The 'administrative fee of about €170' is paid by scholarship winners, not to apply; the application fee amount is not given. Merit funding is mixed (all get a tuition waiver, some an allowance): not scored. Invest your Talent lists eligible countries without Pakistan: no.",
+  "items": [
+    {
+      "name": "Merit-based scholarships for international students (Academic Year 2027/2028)",
+      "funding_type": null,
+      "open_to_pakistan": "unclear",
+      "application_fee": null,
+      "deadlines": [
+        {"label": "Early bird application fee payment deadline (needed to be eligible)", "date": "2026-12-01", "quote": "paying the application fee between October 1st 2026 and December 1st 2026"},
+        {"label": "English language certificate deadline", "date": "2027-03-04", "quote": "A valid certificate of English language proficiency must be submitted within March 4th, 2027"},
+        {"label": "Early bird period opens", "date": "2026-10-01", "quote": "paying the application fee between October 1st 2026 and December 1st 2026", "optional": true}
+      ]
+    },
+    {
+      "name": "Invest your Talent in Italy",
+      "funding_type": "unknown",
+      "open_to_pakistan": "no",
+      "application_fee": null,
+      "deadlines": []
+    }
+  ]
+}

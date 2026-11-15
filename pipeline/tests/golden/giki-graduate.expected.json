@@ -1,0 +1,18 @@
+{
+  "source": "giki-graduate",
+  "notes": "Several dates in one schedule. The test date is tentative. Interviews and session start are optional.",
+  "items": [
+    {
+      "name": "GIKI Graduate (MS & PhD) Admissions - Spring 2027",
+      "funding_type": "unknown",
+      "open_to_pakistan": "unclear",
+      "application_fee": null,
+      "deadlines": [
+        {"label": "Applications deadline", "date": "2026-11-27", "quote": "Applications Deadline\n\nNovember 27, 2026"},
+        {"label": "Admission tests (General + Subject)", "date": "2026-12-24", "quote": "December 24, 2026 (Tentative)"},
+        {"label": "Interviews", "date": "2026-12-30", "quote": "December 30-31, 2026", "optional": true},
+        {"label": "Session starts", "date": "2027-01-18", "quote": "January 18, 2027 (Tentative)", "optional": true}
+      ]
+    }
+  ]
+}

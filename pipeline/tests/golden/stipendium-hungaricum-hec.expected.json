@@ -1,0 +1,15 @@
+{
+  "source": "stipendium-hungaricum-hec",
+  "notes": "The deadline has already passed but is still the date written on the page. Funding is not described.",
+  "items": [
+    {
+      "name": "Stipendium Hungaricum Scholarship Programme (2026-27)",
+      "funding_type": "unknown",
+      "open_to_pakistan": "yes",
+      "application_fee": null,
+      "deadlines": [
+        {"label": "Application deadline (HEC and SH portals)", "date": "2026-01-15", "quote": "15 JANUARY 2026, at 16:00 HRS (PAKISTAN STANDARD TIME)"}
+      ]
+    }
+  ]
+}

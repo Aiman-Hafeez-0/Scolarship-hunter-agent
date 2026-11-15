@@ -2,6 +2,7 @@
 
 import gzip
 from collections.abc import Iterator
+from datetime import date
 from typing import Any
 
 import psycopg
@@ -10,6 +11,9 @@ import pytest
 from pipeline import db
 from pipeline.migrate import apply_migrations
 from pipeline.models import Change, FetchStatus
+from pipeline.nodes.validate import ValidatedScholarship, validate_scholarship
+from pipeline.profile import Profile
+from pipeline.schemas import DeadlineItem, Requirement, ScholarshipExtraction
 from pipeline.tests.conftest import make_result, make_source
 
 Conn = psycopg.Connection[tuple[object, ...]]
@@ -171,3 +175,213 @@ def test_run_status() -> None:
     assert db.run_status([ok, failed]) == "partial"
     assert db.run_status([failed, failed]) == "failed"
     assert db.run_status([]) == "success"
+
+
+# ---------- latest_snapshot ----------
+
+
+def test_latest_snapshot(conn: Conn) -> None:
+    _sync_example(conn, "a", "b")
+    assert db.latest_snapshot(conn, "a") is None
+
+    db.save_result(conn, make_result("a", "Text v1", change=Change.NEW))
+    db.save_result(conn, make_result("a", "Text v2 with ü", change=Change.CHANGED))
+
+    snapshot = db.latest_snapshot(conn, "a")
+    assert snapshot is not None
+    assert snapshot.text == "Text v2 with ü"
+    assert db.latest_snapshot(conn, "b") is None
+
+
+# ---------- save_extraction ----------
+
+PAGE = "Applications close on 15 January 2027. Applicants need a CGPA of 3.0 or higher."
+
+
+def _validated(
+    status: str = "open", deadline_day: int = 15, cgpa: str = "3.0"
+) -> ValidatedScholarship:
+    item = ScholarshipExtraction(
+        name="MS Admission",
+        opportunity_type="admission",
+        location="pakistan",
+        status=status,
+        deadlines=[DeadlineItem(label="Application deadline",
+                                deadline_date=date(2027, 1, deadline_day),
+                                evidence="Applications close on 15 January 2027.")],
+        requirements=[Requirement(kind="cgpa_min", value=cgpa, description="Minimum CGPA",
+                                  evidence="Applicants need a CGPA of 3.0 or higher.")],
+        required_documents=["Transcript", "CNIC"],
+    )  # fmt: skip
+    return validate_scholarship(item, PAGE, date(2026, 11, 15))
+
+
+def _rows(conn: Conn, query: str) -> list[tuple[object, ...]]:
+    return conn.execute(query).fetchall()
+
+
+def test_save_extraction_writes_all_tables(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    db.save_result(conn, make_result("a", PAGE, change=Change.NEW))
+
+    assert db.save_extraction(conn, "a", [_validated()], "extract_v1+fake") == 1
+
+    row = conn.execute(
+        "select name, status::text, extraction_version, needs_review, snapshot_id is not null"
+        " from scholarships"
+    ).fetchone()
+    assert row == ("MS Admission", "open", "extract_v1+fake", False, True)
+    assert _rows(conn, "select label, deadline_date, evidence_id is not null from deadlines") == [
+        ("Application deadline", date(2027, 1, 15), True)
+    ]
+    assert _rows(conn, "select kind, value from requirements") == [("cgpa_min", "3.0")]
+    documents = _rows(conn, "select name from required_documents order by name")
+    assert documents == [("CNIC",), ("Transcript",)]
+    assert sorted(_rows(conn, "select field_path, match_score from evidence")) == [
+        ("deadlines[0]", 100),
+        ("requirements[0]", 100),
+    ]
+    assert _rows(conn, "select * from changes") == []  # first time: nothing to compare with
+
+
+def test_second_save_replaces_details_and_records_changes(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+
+    db.save_extraction(conn, "a", [_validated(status="closed", cgpa="3.5")], "v2")
+
+    assert _rows(conn, "select count(*) from scholarships") == [(1,)]  # upserted, not added
+    assert _rows(conn, "select value from requirements") == [("3.5",)]  # replaced
+    assert _rows(conn, "select count(*) from evidence") == [(2,)]
+    changes = _rows(conn, "select field_path, old_value, new_value from changes order by 1")
+    assert changes == [
+        ("requirements", [{"kind": "cgpa_min", "value": "3.0", "description": "Minimum CGPA"}],
+                         [{"kind": "cgpa_min", "value": "3.5", "description": "Minimum CGPA"}]),
+        ("status", "open", "closed"),
+    ]  # fmt: skip
+
+
+def test_unchanged_extraction_records_no_changes(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+    assert _rows(conn, "select count(*) from changes") == [(0,)]
+
+
+def test_review_notes_are_saved(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    unverified = _validated(deadline_day=25)  # 25 January is not in the quote
+
+    db.save_extraction(conn, "a", [unverified], "v1")
+
+    row = conn.execute("select needs_review, review_notes from scholarships").fetchone()
+    assert row is not None
+    assert row[0] is True
+    assert "not written in its quote" in str(row[1])
+    assert _rows(conn, "select deadline_date from deadlines") == [(None,)]
+
+
+def test_store_saves_snapshot_and_extraction_in_one_transaction(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    store = db.PostgresStore(conn)
+    result = make_result("a", PAGE, change=Change.NEW)
+    broken = _validated()
+    broken.item = broken.item.model_copy(update={"name": None})  # violates "name not null"
+
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        store.save(result, [broken], "v1", remember_hash=True)
+
+    assert _snapshot_count(conn, "a") == 0  # the snapshot was rolled back too
+    assert db.last_hashes(conn) == {}
+
+    assert store.save(result, [_validated()], "v1", remember_hash=False) == 1
+    assert _snapshot_count(conn, "a") == 1
+    assert db.last_hashes(conn) == {}  # not remembered: extracted again next week
+
+
+def test_weekly_run_totals_are_recorded(conn: Conn) -> None:
+    run_id = db.start_run(conn, "weekly")
+    totals = db.RunTotals(tokens_in=1000, tokens_out=200, items_saved=3, items_needing_review=1)
+    db.finish_run(conn, run_id, [make_result("a", change=Change.NEW)], totals=totals)
+    row = conn.execute(
+        "select llm_tokens_in, llm_tokens_out, items_saved, items_needing_review, sources_changed"
+        " from runs where id = %s",
+        (run_id,),
+    ).fetchone()
+    assert row == (1000, 200, 3, 1, 1)
+
+
+# ---------- changed_fields (no database needed) ----------
+
+
+def test_changed_fields() -> None:
+    old = {"status": "open", "intake": "Fall 2027", "campus": None}
+    new = {"status": "closed", "intake": "Fall 2027", "campus": "Islamabad"}
+    assert db.changed_fields(old, new) == [
+        ("campus", None, "Islamabad"),
+        ("status", "open", "closed"),
+    ]
+
+
+def test_comparable_ignores_quotes() -> None:
+    first = _validated().item
+    reworded = first.model_copy(
+        update={"deadlines": [first.deadlines[0].model_copy(update={"evidence": "other words"})]}
+    )
+    assert db.comparable(first) == db.comparable(reworded)
+    assert "name" not in db.comparable(first)
+
+
+# ---------- profiles and matches ----------
+
+
+def _profile(**fields: Any) -> Profile:
+    data: dict[str, Any] = {"full_name": "Test Student", "email": "s@example.com",
+                            "date_of_birth": date(2000, 1, 1), "cgpa": 3.25}  # fmt: skip
+    data.update(fields)
+    return Profile.model_validate(data)
+
+
+def test_upsert_profile_by_email(conn: Conn) -> None:
+    first = db.upsert_profile(conn, _profile())
+    second = db.upsert_profile(conn, _profile(full_name="New Name", cgpa=3.5))
+
+    assert first == second  # same email: updated, not added
+    [(profile_id, loaded)] = db.load_profiles(conn)
+    assert profile_id == str(first)
+    assert (loaded.full_name, loaded.cgpa) == ("New Name", 3.5)
+    assert loaded.reminder_days == [30, 14, 7, 2]
+
+
+def test_load_open_scholarships_and_save_matches(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")  # status open, CGPA requirement 3.0
+    closed = _validated(status="closed")
+    closed.item = closed.item.model_copy(update={"name": "Old Call"})
+    db.save_extraction(conn, "a", [closed], "v1")
+    profile_id = str(db.upsert_profile(conn, _profile()))
+
+    [facts] = db.load_open_scholarships(conn)
+    assert facts.name == "MS Admission"
+    assert facts.deadlines == [date(2027, 1, 15)]
+    assert [(r.kind, r.value) for r in facts.requirements] == [("cgpa_min", "3.0")]
+
+    row = db.MatchRow(profile_id, facts.id or "", "maybe", 60, [{"rule": "cgpa"}])
+    db.save_matches(conn, [row])
+    db.save_matches(conn, [db.MatchRow(profile_id, facts.id or "", "eligible", 70, [])])
+    assert _rows(conn, "select status::text, score, reasons from matches") == [
+        ("eligible", 70, [])  # upserted
+    ]
+
+
+def test_matches_for_closed_scholarships_are_removed(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+    profile_id = str(db.upsert_profile(conn, _profile()))
+    [facts] = db.load_open_scholarships(conn)
+    db.save_matches(conn, [db.MatchRow(profile_id, facts.id or "", "maybe", 50, [])])
+
+    db.save_extraction(conn, "a", [_validated(status="closed")], "v2")  # the call closed
+    db.save_matches(conn, [])
+
+    assert _rows(conn, "select count(*) from matches") == [(0,)]

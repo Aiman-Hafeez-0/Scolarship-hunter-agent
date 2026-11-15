@@ -66,8 +66,8 @@ def test_reminder_cannot_be_sent_twice(test_conn: psycopg.Connection[tuple[objec
                    returning id),
              sch as (insert into scholarships (source_id, name, opportunity_type, location)
                      select id, 'X', 'scholarship', 'abroad' from s returning id),
-             d as (insert into deadlines (scholarship_id, label, deadline_at)
-                   select id, 'Apply', now() from sch returning id)
+             d as (insert into deadlines (scholarship_id, label, deadline_date)
+                   select id, 'Apply', current_date from sch returning id)
         select p.id, d.id from p, d
         """
     ).fetchone()

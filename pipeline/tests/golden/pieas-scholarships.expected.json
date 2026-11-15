@@ -1,0 +1,13 @@
+{
+  "source": "pieas-scholarships",
+  "notes": "Several programmes, no dated deadlines ('first three weeks of Fall semester'). funding_type is scored only where the page is clear: tuition only (need-based, Rizvee-Kidwai) and full (USAID: tuition, books, boarding and lodging, transport). Pakistan is named for Ehsaas (Government of Pakistan) and USAID (Pakistani students). MSCFP is only a heading and is left out.",
+  "items": [
+    {"name": "PIEAS Need Based Scholarships/Qarz-e-Hasna Program", "funding_type": "tuition_only", "open_to_pakistan": "unclear", "application_fee": null, "deadlines": []},
+    {"name": "PIEAS Education Support Fund", "funding_type": null, "open_to_pakistan": "unclear", "application_fee": null, "deadlines": []},
+    {"name": "Ehsaas / Benazir Undergraduate scholarship program", "funding_type": null, "open_to_pakistan": "yes", "application_fee": null, "deadlines": []},
+    {"name": "PEEF - Punjab Educational Endowment Fund", "funding_type": null, "open_to_pakistan": "unclear", "application_fee": null, "deadlines": []},
+    {"name": "Fellowships (BS programs)", "funding_type": null, "open_to_pakistan": "unclear", "application_fee": null, "deadlines": []},
+    {"name": "USAID Funded Merit and Needs based Scholarship Program (MNBSP)", "funding_type": "full", "open_to_pakistan": "yes", "application_fee": null, "deadlines": []},
+    {"name": "Rizvee-Kidwai Scholarship for Computer Science", "funding_type": "tuition_only", "open_to_pakistan": "unclear", "application_fee": null, "deadlines": []}
+  ]
+}
