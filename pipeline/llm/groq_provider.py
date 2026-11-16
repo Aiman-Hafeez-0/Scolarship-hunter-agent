@@ -6,10 +6,8 @@ from collections.abc import Callable
 import groq
 
 from pipeline.config import Settings
-from pipeline.llm.provider import BaseProvider, ProviderError, TransientError
+from pipeline.llm.provider import BaseProvider, ProviderError, TransientError, parse_seconds
 from pipeline.schemas import llm_json_schema
-
-TIMEOUT_S = 120.0
 
 
 class GroqProvider(BaseProvider):
@@ -22,7 +20,7 @@ class GroqProvider(BaseProvider):
         super().__init__(settings.groq_model, settings, sleep)
         # max_retries=0: the SDK must not retry on its own; BaseProvider paces and retries.
         self._client = client or groq.Groq(
-            api_key=settings.groq_api_key, timeout=TIMEOUT_S, max_retries=0
+            api_key=settings.groq_api_key, timeout=settings.llm_timeout_s, max_retries=0
         )
 
     def _call(self, system: str, user: str) -> tuple[str, int, int]:
@@ -45,8 +43,16 @@ class GroqProvider(BaseProvider):
                     },
                 },
             )
-        except (groq.RateLimitError, groq.InternalServerError, groq.APIConnectionError) as exc:
-            raise TransientError(str(exc)) from exc
+        except groq.RateLimitError as exc:
+            wait = parse_seconds(exc.response.headers.get("retry-after"))
+            raise TransientError(f"HTTP 429: {exc}", status=429, retry_after=wait) from exc
+        except groq.InternalServerError as exc:
+            raise TransientError(f"HTTP {exc.status_code}: {exc}", status=exc.status_code) from exc
+        except groq.APITimeoutError as exc:
+            raise TransientError(f"no answer within {self._settings.llm_timeout_s:g} s",
+                                 timed_out=True) from exc  # fmt: skip
+        except groq.APIConnectionError as exc:
+            raise TransientError(f"network error: {exc}") from exc
         except groq.APIError as exc:
             raise ProviderError(f"{self.name}: {exc}") from exc
 

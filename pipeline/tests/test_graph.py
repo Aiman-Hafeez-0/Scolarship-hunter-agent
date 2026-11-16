@@ -1,6 +1,7 @@
 """Tests for pipeline.graph: the whole per-source pipeline with fake HTTP, LLM and store."""
 
 from datetime import date
+from typing import Any
 
 import pytest
 import respx
@@ -195,3 +196,34 @@ async def test_contact_email_is_required(settings: Settings) -> None:
     no_email = settings.model_copy(update={"contact_email": ""})
     with pytest.raises(ValueError, match="CONTACT_EMAIL"):
         await run_sources([], no_email, FakeProvider(), FakeStore(), {})
+
+
+async def test_llm_calls_run_one_at_a_time(site: respx.MockRouter, settings: Settings) -> None:
+    """Fetching may be parallel, but two LLM calls must never run at the same time."""
+    import threading
+    import time
+
+    class SlowProvider:
+        name = last_model = "slow"
+
+        def __init__(self) -> None:
+            self.running = 0
+            self.most_at_once = 0
+            self._lock = threading.Lock()
+
+        def extract(self, page_text: str, source: object, feedback: str | None = None) -> Any:
+            with self._lock:
+                self.running += 1
+                self.most_at_once = max(self.most_at_once, self.running)
+            time.sleep(0.05)
+            with self._lock:
+                self.running -= 1
+            return page(), 1, 1
+
+    provider = SlowProvider()
+    sources = [make_source(key="good"),
+               make_source(key="other", url="https://example.edu.pk/other")]  # fmt: skip
+    await run_sources(sources, settings, provider, FakeStore(), {}, today=TODAY)
+
+    assert settings.max_concurrency > 1
+    assert provider.most_at_once == 1

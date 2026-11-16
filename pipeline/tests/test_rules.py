@@ -204,6 +204,28 @@ def test_english_pass() -> None:
     assert outcome(english_rule(profile(), facts(), TODAY)) == "pass"  # no requirement
 
 
+def test_english_missing_requirement_abroad_is_unknown() -> None:
+    abroad = facts(location="abroad")
+    result = english_rule(profile(), abroad, TODAY)
+    assert result.outcome == "unknown"
+    assert result.action == "check the English requirement on the official page"
+    # Even with a test score: the minimum is not known.
+    scored = english_rule(profile(english_test="IELTS", english_score="7"), abroad, TODAY)
+    assert scored.outcome == "unknown"
+    # MOI accepted and you have a letter: that is enough.
+    moi = facts(location="abroad", moi_accepted="yes")
+    assert outcome(english_rule(profile(moi_letter=True), moi, TODAY)) == "pass"
+    # In Pakistan, no requirement on the page still passes.
+    assert outcome(english_rule(profile(), facts(location="pakistan"), TODAY)) == "pass"
+
+
+def test_other_missing_requirements_still_pass_abroad() -> None:
+    abroad = facts(location="abroad")
+    assert outcome(age_rule(profile(), abroad, TODAY)) == "pass"
+    assert outcome(cgpa_rule(profile(), abroad, TODAY)) == "pass"
+    assert outcome(work_experience_rule(profile(), abroad, TODAY)) == "pass"
+
+
 def test_english_fail() -> None:
     either = facts(requirements=[req("english_test", "IELTS 6.5 or TOEFL iBT 90")])
     result = english_rule(profile(english_test="TOEFL iBT", english_score="85"), either, TODAY)

@@ -134,8 +134,14 @@ def test_run_eval_report_and_csv(tmp_path: Path) -> None:
 
     path = tmp_path / "results.csv"
     append_results(csv_row(run, TODAY), path)
-    append_results(csv_row(run, TODAY), path)
+    append_results(csv_row(run, TODAY, "groq"), path)
     rows = list(csv.reader(path.open(encoding="utf-8")))
     assert rows[0] == CSV_HEADER
-    assert rows[1][:7] == ["2026-11-15", "fake-model", "extract_v1", "1", "1", "2", "0.5000"]
+    assert rows[1][:8] == ["2026-11-15", "auto", "fake-model", "extract_v1", "1", "1", "2",
+                           "0.5000"]  # fmt: skip
+    assert rows[2][1] == "groq"
     assert len(rows) == 3  # header written once
+
+
+def test_csv_has_provider_column() -> None:
+    assert CSV_HEADER[:3] == ["date", "provider", "model"]

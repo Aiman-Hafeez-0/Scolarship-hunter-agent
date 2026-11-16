@@ -4,7 +4,9 @@ Every rule takes (profile, scholarship, today) and returns a RuleResult: "pass",
 "unknown" with a one-line reason (and sometimes an action, e.g. "take IELTS or TOEFL").
 
 A requirement that is not on the page passes ("no age limit on the page"): we can only check
-what was extracted. Admissions and entry tests skip the funding and fee rules.
+what was extracted. One exception: for opportunities abroad, a missing English requirement is
+"unknown", because almost every program abroad asks for English proof.
+Admissions and entry tests skip the funding and fee rules.
 
 Overall status: any fail = not_eligible; otherwise any unknown = maybe; all pass = eligible.
 """
@@ -24,6 +26,7 @@ Outcome = Literal["pass", "fail", "unknown"]
 Status = Literal["eligible", "maybe", "not_eligible"]
 
 TARGET_LEVEL = "master"
+CHECK_ENGLISH = "check the English requirement on the official page"
 ENGLISH_TESTS = {"ielts": "IELTS", "toefl": "TOEFL", "pte": "PTE", "duolingo": "Duolingo"}
 ABBREVIATIONS = {
     "ai": "artificial intelligence",
@@ -66,6 +69,7 @@ class ScholarshipFacts:
     name: str
     opportunity_type: str = "scholarship"
     status: str = "unknown"
+    location: str = ""  # "abroad" or "pakistan"
     degree_levels: list[str] = field(default_factory=list)
     fields_of_study: list[str] = field(default_factory=list)
     funding: str = "unknown"
@@ -265,10 +269,13 @@ def _test_scores(text: str) -> list[tuple[str, float]]:
 def english_rule(p: Profile, s: ScholarshipFacts, today: date) -> RuleResult:
     name = "english"
     requirements = s.requirements_of("english_test")
-    if not requirements:
-        return RuleResult(name, "pass", "no English test requirement on the page")
     if s.moi_accepted == "yes" and p.moi_letter:
         return RuleResult(name, "pass", "an MOI letter is accepted and you have one")
+    if not requirements:
+        if s.location == "abroad":  # programs abroad nearly always need English proof
+            return RuleResult(name, "unknown", "the page does not state an English requirement",
+                              action=CHECK_ENGLISH)  # fmt: skip
+        return RuleResult(name, "pass", "no English test requirement on the page")
 
     needed = [pair for r in requirements for pair in _test_scores(r.text)]
     wanted = " / ".join(f"{t} {n:g}" for t, n in needed) or requirements[0].text

@@ -11,12 +11,16 @@
     uv run python -m pipeline.run weekly --only KEY --force
                                                         one source, re-extracted even if unchanged
                                                         (ends by matching, like `match`)
+    uv run python -m pipeline.run weekly --provider groq
+                                                        which LLM to use: auto (default: Gemini,
+                                                        Groq as fallback), gemini or groq
     uv run python -m pipeline.run profile               save profile.yaml to the profiles table
     uv run python -m pipeline.run match                 match every profile against every
                                                         scholarship that is not closed
 
 Exit code: 0 normally; 1 if every source failed (fetch, weekly) or the result needs review
-(extract); 2 for setup problems (bad config, unknown key, missing snapshot or profile).
+(extract); 2 for setup problems (bad config, unknown key, missing snapshot or profile,
+database unreachable). Database errors are printed with the password hidden.
 """
 
 import argparse
@@ -31,9 +35,9 @@ from typing import Any
 import psycopg
 
 from pipeline import db
-from pipeline.config import Settings
+from pipeline.config import Settings, mask_secrets
 from pipeline.graph import SourceOutcome, run_sources
-from pipeline.llm.provider import LLMProvider, build_provider
+from pipeline.llm.provider import PROVIDER_CHOICES, LLMProvider, ProviderChoice, build_provider
 from pipeline.models import Change, FetchResult, FetchStatus, Source
 from pipeline.nodes.detect_change import detect_changes
 from pipeline.nodes.extract import ExtractResult, extract_page
@@ -179,13 +183,14 @@ def run_weekly(
     force: bool,
     provider: LLMProvider | None = None,
     today: date | None = None,
+    provider_choice: ProviderChoice = "auto",
 ) -> tuple[list[SourceOutcome], list[Match]]:
     """Sync sources, run the graph for each chosen source, record the run, then match."""
     if not settings.database_url:
         raise SetupError("DATABASE_URL is not set: the weekly run saves to the database")
     all_sources = load_sources(settings.sources_file, include_inactive=True)
     chosen = choose_sources(all_sources, only)
-    provider = provider or build_provider(settings)
+    provider = provider or build_provider(settings, provider_choice)
 
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         db.sync_sources(conn, all_sources)
@@ -329,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
     weekly = commands.add_parser("weekly", help="fetch, extract, validate and save every source")
     weekly.add_argument("--only", metavar="KEY", help="run only the source with this key")
     weekly.add_argument("--force", action="store_true", help="re-extract unchanged pages too")
+    weekly.add_argument("--provider", choices=PROVIDER_CHOICES, default="auto",
+                        help="LLM to use (auto = Gemini, then Groq if Gemini fails)")
     commands.add_parser("profile", help="save profile.yaml to the profiles table")
     commands.add_parser("match", help="match every profile against open scholarships")
     args = parser.parse_args(argv)
@@ -345,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "extract":
             report = run_extract(Settings(), only=args.only)
         elif args.command == "weekly":
-            outcomes, matches = run_weekly(Settings(), only=args.only, force=args.force)
+            outcomes, matches = run_weekly(Settings(), only=args.only, force=args.force,
+                                           provider_choice=args.provider)
         elif args.command == "profile":
             print(run_profile(Settings()))
             return 0
@@ -354,7 +362,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             results = run_fetch(Settings(), local=args.local, only=args.only)
     except (SetupError, SourcesError, ProfileError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error: {mask_secrets(str(exc))}", file=sys.stderr)
+        return 2
+    except psycopg.Error as exc:  # never print the connection string's password
+        print(f"Database error: {mask_secrets(str(exc))}", file=sys.stderr)
         return 2
 
     if args.command == "extract":

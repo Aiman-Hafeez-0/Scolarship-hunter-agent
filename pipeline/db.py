@@ -8,13 +8,14 @@ import gzip
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import psycopg
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
+from pipeline.config import mask_secrets
 from pipeline.matching.rules import RequirementFact, ScholarshipFacts
 from pipeline.models import Change, FetchResult, FetchStatus, Source
 from pipeline.nodes.validate import ValidatedScholarship
@@ -63,8 +64,26 @@ def last_hashes(conn: Conn) -> dict[str, str]:
     return {str(key): str(last_hash) for key, last_hash in rows}
 
 
+STALE_RUN_AFTER = timedelta(hours=2)
+STALE_RUN_ERROR = "stopped before finishing"
+
+
+def fail_stale_runs(conn: Conn, older_than: timedelta = STALE_RUN_AFTER) -> int:
+    """Mark runs still 'running' after `older_than` as failed (the process died or was
+    stopped, so it never recorded its end). Returns how many runs were marked."""
+    cur = conn.execute(
+        """
+        update runs set status = 'failed', finished_at = now(), error = %s
+        where status = 'running' and started_at < now() - %s
+        """,
+        (STALE_RUN_ERROR, older_than),
+    )
+    return cur.rowcount
+
+
 def start_run(conn: Conn, kind: str = "fetch") -> uuid.UUID:
-    """Record that a run has started. Returns its id."""
+    """Record that a run has started (first cleaning up stale runs). Returns its id."""
+    fail_stale_runs(conn)
     row = conn.execute("insert into runs (kind) values (%s) returning id", (kind,)).fetchone()
     assert row is not None
     return uuid.UUID(str(row[0]))
@@ -97,6 +116,7 @@ def finish_run(
 ) -> None:
     """Record the end of a run with its counts and overall status."""
     status = "failed" if error else run_status(results)
+    error = mask_secrets(error) if error else error
     changed = sum(r.change in (Change.NEW, Change.CHANGED) for r in results)
     failed = sum(r.status is FetchStatus.FAILED for r in results)
     totals = totals or RunTotals()
@@ -450,7 +470,7 @@ def load_open_scholarships(conn: Conn) -> list[ScholarshipFacts]:
     rows = conn.execute(
         """
         select id, name, opportunity_type, status::text, degree_levels, fields_of_study,
-               funding::text, open_to_pakistan, moi_accepted, application_fee
+               funding::text, open_to_pakistan, moi_accepted, application_fee, location
         from scholarships where status <> 'closed' order by name
         """
     ).fetchall()
@@ -459,7 +479,7 @@ def load_open_scholarships(conn: Conn) -> list[ScholarshipFacts]:
             id=str(r[0]), name=str(r[1]), opportunity_type=str(r[2]), status=str(r[3]),
             degree_levels=list(r[4]), fields_of_study=list(r[5]),
             funding=str(r[6]), open_to_pakistan=str(r[7]), moi_accepted=str(r[8]),
-            application_fee=None if r[9] is None else str(r[9]),
+            application_fee=None if r[9] is None else str(r[9]), location=str(r[10]),
         )
         for r in rows
     }  # fmt: skip

@@ -1,6 +1,7 @@
 """Measure extraction quality on the golden test set (calls the real LLM API).
 
-    uv run python -m pipeline.eval
+    uv run python -m pipeline.eval                    Gemini, with Groq as fallback
+    uv run python -m pipeline.eval --provider groq    only Groq (or: gemini, auto)
 
 For every pipeline/tests/golden/<key>.txt with a <key>.expected.json (written by hand),
 run the real extraction + validation and compare with the expected answer:
@@ -14,10 +15,12 @@ run the real extraction + validation and compare with the expected answer:
   expected file is too ambiguous to score and is skipped (application_fee null means
   "the page states no fee" and IS scored).
 
-Prints accuracy per field and every mismatch, and appends one row to results.csv.
+Prints accuracy per field and every mismatch, and appends one row to results.csv
+(its `provider` column is the --provider option; `model` lists the models that answered).
 Not part of pytest or CI, because it costs API tokens.
 """
 
+import argparse
 import csv
 import io
 import re
@@ -32,7 +35,7 @@ from pydantic import BaseModel, ConfigDict
 from rapidfuzz import fuzz
 
 from pipeline.config import Settings
-from pipeline.llm.provider import build_provider
+from pipeline.llm.provider import PROVIDER_CHOICES, ProviderChoice, build_provider
 from pipeline.models import Source
 from pipeline.nodes.extract import ExtractResult, extract_page
 from pipeline.nodes.load_sources import load_sources
@@ -43,7 +46,7 @@ GOLDEN_DIR = Path(__file__).resolve().parent / "tests" / "golden"
 RESULTS_CSV = GOLDEN_DIR / "results.csv"
 FIELDS = ("funding_type", "open_to_pakistan", "application_fee")
 CSV_HEADER = [
-    "date", "model", "prompt_version", "pages",
+    "date", "provider", "model", "prompt_version", "pages",
     "deadline_correct", "deadline_total", "deadline_accuracy",
     "funding_type_accuracy", "open_to_pakistan_accuracy", "fee_accuracy",
     "tokens_in", "tokens_out",
@@ -270,7 +273,7 @@ def format_report(run: EvalRun) -> str:
     return "\n".join(lines)
 
 
-def csv_row(run: EvalRun, today: date) -> list[str]:
+def csv_row(run: EvalRun, today: date, provider: ProviderChoice = "auto") -> list[str]:
     deadline = deadline_total(run.pages)
 
     def acc(score: Score) -> str:
@@ -278,7 +281,7 @@ def csv_row(run: EvalRun, today: date) -> list[str]:
 
     fields = [acc(field_total(run.pages, name)) for name in FIELDS]
     return [
-        today.isoformat(), run.models, EXTRACT_VERSION, str(len(run.pages)),
+        today.isoformat(), provider, run.models, EXTRACT_VERSION, str(len(run.pages)),
         str(deadline.correct), str(deadline.total), acc(deadline), *fields,
         str(sum(r.tokens_in for r in run.extractions.values())),
         str(sum(r.tokens_out for r in run.extractions.values())),
@@ -294,18 +297,24 @@ def append_results(row: list[str], path: Path = RESULTS_CSV) -> None:
         writer.writerow(row)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m pipeline.eval")
+    parser.add_argument("--provider", choices=PROVIDER_CHOICES, default="auto",
+                        help="LLM to use (auto = Gemini, then Groq if Gemini fails)")
+    args = parser.parse_args(argv)
+    choice: ProviderChoice = args.provider
+
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8")
     settings = Settings()
     pages = load_golden()
     sources = {s.key: s for s in load_sources(settings.sources_file, include_inactive=True)}
-    provider = build_provider(settings)
+    provider = build_provider(settings, choice)
     today = date.today()
 
     run = run_eval(pages, sources, lambda text, src: extract_page(text, src, provider), today)
     print(format_report(run))
-    append_results(csv_row(run, today))
+    append_results(csv_row(run, today, choice))
     print(f"\nAppended to {RESULTS_CSV}")
     return 0
 

@@ -10,10 +10,11 @@ Errors a provider can raise:
 """
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -35,8 +36,30 @@ class ProviderConfigError(ValueError):
     """No usable API key in the settings."""
 
 
+ProviderChoice = Literal["auto", "gemini", "groq"]
+PROVIDER_CHOICES: tuple[ProviderChoice, ...] = ("auto", "gemini", "groq")
+
+
 class TransientError(Exception):
-    """A failure worth retrying after a pause: HTTP 429, 5xx or a network problem."""
+    """A failure that may work if tried again soon.
+
+    - status 429: rate limited. `retry_after` is how long the server asked us to wait
+      (None if it did not say).
+    - status 5xx (e.g. 503/504): the service is busy or down.
+    - status None: a network problem. `timed_out=True` means the call took too long.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        retry_after: float | None = None,
+        timed_out: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+        self.timed_out = timed_out
 
 
 class InvalidOutput(Exception):
@@ -87,12 +110,37 @@ class Pacer:
         self._last = self._clock()
 
 
+def retry_delay(exc: TransientError, settings: Settings) -> float | None:
+    """How long to wait before trying again, or None to give up now (fail fast).
+
+    - Timeout: give up. Each call may already have taken llm_timeout_s.
+    - 429: wait as long as the server asks. If it asks for longer than
+      llm_max_retry_wait_s (e.g. the daily quota is used up), give up.
+      If it does not say, wait llm_retry_backoff_s.
+    - 5xx or another network problem: wait llm_retry_backoff_s.
+    """
+    if exc.timed_out:
+        return None
+    if exc.status == 429 and exc.retry_after is not None:
+        return exc.retry_after if exc.retry_after <= settings.llm_max_retry_wait_s else None
+    return settings.llm_retry_backoff_s
+
+
+def parse_seconds(value: object) -> float | None:
+    """ "17", "17s", "1.5s" or 17 -> seconds as a float; anything else -> None."""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*s?\s*", str(value)) if value is not None else None
+    return float(match.group(1)) if match else None
+
+
 class BaseProvider(ABC):
     """Shared logic: build the prompt, pace calls, retry 429/5xx, validate the answer.
 
     A concrete provider only implements `_call`, which sends one request and returns
     (answer_text, tokens_in, tokens_out). It raises TransientError for 429/5xx/network
     problems and ProviderError for everything else.
+
+    Each page gets at most `llm_max_tries` calls (see retry_delay for the waits); after
+    that a ProviderError is raised, so FallbackProvider can switch to the next provider.
     """
 
     def __init__(
@@ -100,8 +148,7 @@ class BaseProvider(ABC):
     ) -> None:
         self.name = model
         self.last_model = model
-        self._retries = settings.llm_retries
-        self._backoff_s = settings.llm_retry_backoff_s
+        self._settings = settings
         self._sleep = sleep
         self._pacer = Pacer(settings.llm_min_interval_s, sleep=sleep)
 
@@ -115,14 +162,15 @@ class BaseProvider(ABC):
         return parse_output(text, tokens_in, tokens_out), tokens_in, tokens_out
 
     def _call_with_retries(self, system: str, user: str) -> tuple[str, int, int]:
-        for attempt in range(self._retries + 1):
+        tries = max(1, self._settings.llm_max_tries)
+        for attempt in range(1, tries + 1):
             self._pacer.wait()
             try:
                 return self._call(system, user)
             except TransientError as exc:
-                if attempt == self._retries:
+                delay = retry_delay(exc, self._settings)
+                if delay is None or attempt == tries:
                     raise ProviderError(f"{self.name}: {exc}") from exc
-                delay = self._backoff_s * 2**attempt
                 logger.warning("%s: %s; retrying in %.0f s", self.name, exc, delay)
                 self._sleep(delay)
         raise AssertionError("unreachable")  # the loop always returns or raises
@@ -157,11 +205,25 @@ class FallbackProvider:
         return result
 
 
-def build_provider(settings: Settings) -> LLMProvider:
-    """Gemini first, Groq as fallback; whichever keys are set in .env."""
+def build_provider(settings: Settings, choice: ProviderChoice = "auto") -> LLMProvider:
+    """Which LLM to use.
+
+    auto:   Gemini first, Groq as fallback; whichever keys are set in .env.
+    gemini: only Gemini (needs GEMINI_API_KEY).
+    groq:   only Groq (needs GROQ_API_KEY).
+    """
     # Imported here so tests and other commands never load the SDKs they do not need.
     from pipeline.llm.gemini_provider import GeminiProvider
     from pipeline.llm.groq_provider import GroqProvider
+
+    if choice == "gemini":
+        if not settings.gemini_api_key:
+            raise ProviderConfigError("--provider gemini needs GEMINI_API_KEY in .env")
+        return GeminiProvider(settings)
+    if choice == "groq":
+        if not settings.groq_api_key:
+            raise ProviderConfigError("--provider groq needs GROQ_API_KEY in .env")
+        return GroqProvider(settings)
 
     providers: list[LLMProvider] = []
     if settings.gemini_api_key:

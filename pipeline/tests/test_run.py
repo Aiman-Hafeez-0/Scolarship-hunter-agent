@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
 import respx
 
@@ -235,3 +236,38 @@ def test_profile_command_needs_profile_yaml(local_settings: Settings, tmp_path: 
 def test_match_command_needs_database_url(local_settings: Settings) -> None:
     with pytest.raises(SetupError, match="DATABASE_URL"):
         run_match(local_settings)
+
+
+def test_weekly_passes_provider_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_weekly(settings: Settings, **kwargs: Any) -> tuple[list[SourceOutcome], list[Any]]:
+        seen.update(kwargs)
+        return [], []
+
+    monkeypatch.setattr("pipeline.run.run_weekly", fake_weekly)
+    main(["weekly", "--provider", "groq", "--force"])
+    assert seen["provider_choice"] == "groq"
+    assert seen["force"] is True
+    main(["weekly"])
+    assert seen["provider_choice"] == "auto"
+
+
+def test_weekly_rejects_unknown_provider() -> None:
+    with pytest.raises(SystemExit):
+        main(["weekly", "--provider", "openai"])
+
+
+def test_database_error_hides_password(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(settings: Settings, **kwargs: Any) -> Any:
+        raise psycopg.OperationalError(
+            'missing "=" after "postgresql://me:s3cret@db.example.com/x" in connection info'
+        )
+
+    monkeypatch.setattr("pipeline.run.run_match", broken)
+    assert main(["match"]) == 2
+    err = capsys.readouterr().err
+    assert "s3cret" not in err
+    assert "postgresql://me:***@db.example.com/x" in err

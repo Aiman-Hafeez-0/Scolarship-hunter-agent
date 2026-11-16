@@ -2,7 +2,7 @@
 
 import gzip
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import psycopg
@@ -161,6 +161,47 @@ def test_run_with_error_is_failed(conn: Conn) -> None:
     db.finish_run(conn, run_id, [], error="KeyboardInterrupt")
     row = conn.execute("select status::text, error from runs where id = %s", (run_id,)).fetchone()
     assert row == ("failed", "KeyboardInterrupt")
+
+
+def _age_run(conn: Conn, run_id: object, hours: float) -> None:
+    conn.execute("update runs set started_at = now() - %s where id = %s",
+                 (timedelta(hours=hours), run_id))  # fmt: skip
+
+
+def test_stale_running_runs_are_marked_failed(conn: Conn) -> None:
+    stuck = db.start_run(conn, "weekly")
+    _age_run(conn, stuck, 3)
+    recent = db.start_run(conn, "weekly")
+    _age_run(conn, recent, 1)
+    done = db.start_run(conn, "fetch")
+    db.finish_run(conn, done, [])
+    _age_run(conn, done, 5)
+
+    assert db.fail_stale_runs(conn) == 1
+
+    rows = {row[0]: row[1] for row in _rows(conn, "select id, status::text from runs")}
+    assert rows[stuck] == "failed"
+    assert rows[recent] == "running"
+    assert rows[done] == "success"
+    row = conn.execute("select error, finished_at from runs where id = %s", (stuck,)).fetchone()
+    assert row is not None
+    assert row[0] == "stopped before finishing"
+    assert row[1] is not None
+
+
+def test_start_run_cleans_up_stale_runs(conn: Conn) -> None:
+    stuck = db.start_run(conn, "weekly")
+    _age_run(conn, stuck, 2.5)
+    db.start_run(conn, "weekly")
+    row = conn.execute("select status::text from runs where id = %s", (stuck,)).fetchone()
+    assert row == ("failed",)
+
+
+def test_run_error_hides_password(conn: Conn) -> None:
+    run_id = db.start_run(conn)
+    db.finish_run(conn, run_id, [], error="OperationalError: postgresql://u:s3cret@host/db")
+    row = conn.execute("select error from runs where id = %s", (run_id,)).fetchone()
+    assert row == ("OperationalError: postgresql://u:***@host/db",)
 
 
 # ---------- run_status (no database needed) ----------
@@ -363,6 +404,7 @@ def test_load_open_scholarships_and_save_matches(conn: Conn) -> None:
 
     [facts] = db.load_open_scholarships(conn)
     assert facts.name == "MS Admission"
+    assert facts.location in ("abroad", "pakistan")
     assert facts.deadlines == [date(2027, 1, 15)]
     assert [(r.kind, r.value) for r in facts.requirements] == [("cgpa_min", "3.0")]
 

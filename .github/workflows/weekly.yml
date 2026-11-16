@@ -1,0 +1,77 @@
+name: Weekly run
+
+# Manual only for now: Actions tab > "Weekly run" > "Run workflow".
+# (A schedule will be added later.)
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-extract pages even if they did not change"
+        type: boolean
+        default: false
+      provider:
+        description: "LLM to use (auto = Gemini, then Groq if Gemini fails)"
+        type: choice
+        options: [auto, gemini, groq]
+        default: auto
+
+# The job only needs to read the code.
+permissions:
+  contents: read
+
+# Never let two runs overlap (they would hit the same sites and LLM quotas twice).
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    # "shell: bash" turns on pipefail, so `... | tee` still fails the step if the command fails.
+    defaults:
+      run:
+        shell: bash
+
+    # The profile is already in the database, so profile.yaml is not needed here.
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked --no-dev
+
+      # Inputs go through env variables, never pasted straight into the shell command.
+      - name: Fetch, extract and save
+        env:
+          FORCE: ${{ inputs.force }}
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          args=(--provider "$PROVIDER")
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          uv run --no-dev python -m pipeline.run weekly "${args[@]}" 2>&1 | tee weekly-summary.txt
+
+      # Runs even if the weekly step failed, so matches are fresh for what was saved.
+      - name: Match profiles
+        if: ${{ !cancelled() }}
+        run: uv run --no-dev python -m pipeline.run match 2>&1 | tee match-summary.txt
+
+      - name: Upload summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-summary
+          path: |
+            weekly-summary.txt
+            match-summary.txt
+          if-no-files-found: warn
+          retention-days: 30
