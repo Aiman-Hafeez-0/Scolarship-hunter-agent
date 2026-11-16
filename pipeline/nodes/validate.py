@@ -8,8 +8,13 @@ Three checks, run on every extraction:
 2. Date check: the day and the month of a deadline_date must both be written in that
    deadline's quote (month as an English, Italian or Turkish name, or as a number in a date
    like 15.01.2027). If not, the date is set to null and the item needs review.
-3. Past dates: a deadline before today is closed. If every dated deadline has passed and no
-   new cycle is announced (no future deadline, LLM status not "upcoming"), status = closed.
+3. Status from dates:
+   - an item whose intake season has started (Fall 2026 starts in September 2026, Spring 2027
+     in February 2027) is closed, unless a deadline is still ahead (then it needs review);
+   - an item with no dated deadline is "unknown" (never "open" or "upcoming"), so it can
+     never count as "action needed"; a "closed" from the page is kept;
+   - if every dated deadline has passed and no new cycle is announced (LLM status not
+     "upcoming"), status = closed.
 """
 
 import re
@@ -38,6 +43,9 @@ MONTH_NAMES: dict[int, tuple[str, ...]] = {
     11: ("november", "nov", "novembre", "kasim"),
     12: ("december", "dec", "dicembre", "dic", "aralik"),
 }
+# The month each intake season starts.
+SEASON_START_MONTH = {"fall": 9, "autumn": 9, "spring": 2}
+INTAKE_SEASON = re.compile(r"\b(fall|autumn|spring)\b\W{0,3}(20\d\d)\b", re.IGNORECASE)
 # A numeric date such as 15.01.2027, 15/1/27, 01/15/2027 or 2027-01-15.
 NUMERIC_DATE = re.compile(r"(?<!\d)(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})(?!\d)")
 
@@ -145,8 +153,20 @@ def validate_scholarship(
         "moi_accepted", item.moi_evidence, page_text, result
     ):
         updates |= {"moi_accepted": "unclear", "moi_evidence": None}
+    if item.intake is not None and not _keep("intake", item.intake_evidence, page_text, result):
+        updates |= {"intake": None, "intake_evidence": None}
+    if item.degree_levels and not _keep(
+        "degree_levels", item.degree_levels_evidence, page_text, result
+    ):
+        updates |= {"degree_levels": [], "degree_levels_evidence": None}
 
     cleaned = item.model_copy(update=updates)
+    started = intake_start(cleaned.intake)
+    ahead = [d.deadline_date for d in cleaned.deadlines
+             if d.deadline_date is not None and d.deadline_date >= today]  # fmt: skip
+    if started is not None and started <= today and ahead:
+        result.flag(f"intake {cleaned.intake!r} has started, but deadline {min(ahead)} is "
+                    "still ahead; status not changed")  # fmt: skip
     status = status_after_dates(cleaned, today)
     if status != cleaned.status:
         cleaned = cleaned.model_copy(update={"status": status})
@@ -217,14 +237,35 @@ def is_closed(deadline: DeadlineItem, today: date) -> bool:
     return deadline.deadline_date is not None and deadline.deadline_date < today
 
 
-def status_after_dates(item: ScholarshipExtraction, today: date) -> str:
-    """"closed" if every dated deadline has passed and no new cycle is announced.
+def intake_start(intake: str | None) -> date | None:
+    """When the intake begins: "Fall 2026" -> 2026-09-01, "Spring 2027" -> 2027-02-01.
 
-    A new cycle is announced when some deadline is today or later, or when the page says
-    the next round is coming (the LLM's status is "upcoming"). Otherwise keep the status.
+    If several seasons are named ("Fall 2026 and Spring 2027"), the latest one counts.
+    None if the intake names no season and year.
+    """
+    if not intake:
+        return None
+    starts = [date(int(year), SEASON_START_MONTH[season.lower()], 1)
+              for season, year in INTAKE_SEASON.findall(intake)]  # fmt: skip
+    return max(starts) if starts else None
+
+
+def status_after_dates(item: ScholarshipExtraction, today: date) -> str:
+    """The status after looking at the intake and the dated deadlines.
+
+    - intake season already started and no deadline still ahead: "closed";
+    - no dated deadline: "unknown" (a "closed" written on the page is kept);
+    - every dated deadline passed and no new cycle announced: "closed". A new cycle is
+      announced when the page says the next round is coming (LLM status "upcoming").
+    Otherwise the LLM's status is kept.
     """
     dated = [d for d in item.deadlines if d.deadline_date is not None]
-    if not dated or item.status == "upcoming":
+    started = intake_start(item.intake)
+    if started is not None and started <= today and all(is_closed(d, today) for d in dated):
+        return "closed"
+    if not dated:
+        return "closed" if item.status == "closed" else "unknown"
+    if item.status == "upcoming":
         return item.status
     if all(is_closed(d, today) for d in dated):
         return "closed"

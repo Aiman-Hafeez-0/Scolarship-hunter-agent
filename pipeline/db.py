@@ -59,8 +59,17 @@ def sync_sources(conn: Conn, sources: list[Source]) -> None:
 
 
 def last_hashes(conn: Conn) -> dict[str, str]:
-    """The fingerprint of the last saved snapshot for each source key."""
+    """The fingerprint of the last fetched page for each source key (used by `fetch`)."""
     rows = conn.execute("select key, last_hash from sources where last_hash is not null")
+    return {str(key): str(last_hash) for key, last_hash in rows}
+
+
+def last_extracted_hashes(conn: Conn) -> dict[str, str]:
+    """The fingerprint of the last page that was extracted and saved without errors, for
+    each source key (used by `weekly`: a page that differs from it is extracted again)."""
+    rows = conn.execute(
+        "select key, last_extracted_hash from sources where last_extracted_hash is not null"
+    )
     return {str(key): str(last_hash) for key, last_hash in rows}
 
 
@@ -133,11 +142,12 @@ def finish_run(
     )  # fmt: skip
 
 
-def save_result(conn: Conn, result: FetchResult, remember_hash: bool = True) -> None:
-    """Store what one fetch found.
+def save_result(conn: Conn, result: FetchResult) -> None:
+    """Store what one fetch found, and remember the page's fingerprint in last_hash.
 
-    remember_hash=False saves the snapshot but not the page's fingerprint, so the page
-    counts as changed next time and is extracted again (used when the LLM call failed).
+    A snapshot is added only when the page text differs from the last saved one. (The weekly
+    run compares with last_extracted_hash instead, so it can see a page as new that `fetch`
+    already saved; the snapshot is then not stored twice.)
     """
     key = result.source.key
     with conn.transaction():
@@ -148,7 +158,8 @@ def save_result(conn: Conn, result: FetchResult, remember_hash: bool = True) -> 
                     """
                     insert into snapshots (source_id, http_status, content_type, content_hash,
                                            text_gz, char_count)
-                    select id, %s, %s, %s, %s, %s from sources where key = %s
+                    select id, %s, %s, %s, %s, %s from sources
+                    where key = %s and last_hash is distinct from %s
                     """,
                     (
                         result.http_status,
@@ -157,13 +168,14 @@ def save_result(conn: Conn, result: FetchResult, remember_hash: bool = True) -> 
                         text_gz,
                         len(result.text),
                         key,
+                        result.content_hash,
                     ),
                 )
-                if remember_hash:
-                    conn.execute(
-                        "update sources set last_hash = %s where key = %s",
-                        (result.content_hash, key),
-                    )
+            if result.content_hash is not None:
+                conn.execute(
+                    "update sources set last_hash = %s where key = %s",
+                    (result.content_hash, key),
+                )
             conn.execute(
                 """
                 update sources set last_fetched_at = now(), last_http_status = %s,
@@ -273,6 +285,8 @@ QUOTE_FIELDS: Any = {
     "application_fee_evidence": True,
     "open_to_pakistan_evidence": True,
     "moi_evidence": True,
+    "intake_evidence": True,
+    "degree_levels_evidence": True,
     "coverage": {"evidence"},
     "deadlines": {"__all__": {"evidence"}},
     "requirements": {"__all__": {"evidence"}},
@@ -422,12 +436,23 @@ class PostgresStore:
         result: FetchResult,
         items: list[ValidatedScholarship],
         extraction_version: str,
-        remember_hash: bool,
+        mark_extracted: bool,
     ) -> int:
-        """Snapshot and extraction of one source, in a single transaction."""
+        """Snapshot and extraction of one source, in a single transaction.
+
+        mark_extracted=True (the extraction had no errors) also sets last_extracted_hash,
+        last of all: if anything before it fails, the whole transaction is undone and the
+        page is extracted again next run. With False, the old last_extracted_hash stays.
+        """
         with self._lock, self.conn.transaction():
-            save_result(self.conn, result, remember_hash=remember_hash)
-            return save_extraction(self.conn, result.source.key, items, extraction_version)
+            save_result(self.conn, result)
+            saved = save_extraction(self.conn, result.source.key, items, extraction_version)
+            if mark_extracted and result.content_hash is not None:
+                self.conn.execute(
+                    "update sources set last_extracted_hash = %s where key = %s",
+                    (result.content_hash, result.source.key),
+                )
+            return saved
 
 
 # ---------- Profiles and matches ----------

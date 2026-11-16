@@ -4,7 +4,9 @@
                   |                        |
                   +-> (unchanged) END      +-> (invalid JSON, first time) back to extract
 
-- An unchanged page ends the run for that source, unless `force` is set.
+- A page is "unchanged" when it matches the last page that was extracted and saved without
+  errors (sources.last_extracted_hash). Such a page ends the run for that source, unless
+  `force` is set. A page only fetched by `fetch`, or whose extraction failed, is extracted.
 - A page that could not be fetched (failed, blocked by robots.txt, needs a browser) ends too.
 - run_sources runs the graph for many sources, at most `max_concurrency` at a time.
   One broken source never stops the others: its error is recorded in its outcome.
@@ -49,7 +51,7 @@ class Store(Protocol):
         result: FetchResult,
         items: list[ValidatedScholarship],
         extraction_version: str,
-        remember_hash: bool,
+        mark_extracted: bool,
     ) -> int: ...
 
 
@@ -72,7 +74,7 @@ class Deps:
     client: httpx.AsyncClient
     provider: LLMProvider
     store: Store
-    last_hashes: Mapping[str, str]
+    extracted_hashes: Mapping[str, str]  # source key -> fingerprint of last extracted page
     force: bool
     today: date
     limiter: DomainRateLimiter
@@ -108,7 +110,7 @@ def build_graph(deps: Deps) -> Any:
         return {"fetched": result}
 
     async def detect_change(state: SourceState) -> SourceState:
-        [result] = detect_changes([state["fetched"]], deps.last_hashes)
+        [result] = detect_changes([state["fetched"]], deps.extracted_hashes)
         if not should_extract(result, deps.force):
             await asyncio.to_thread(deps.store.record_fetch, result)
         return {"fetched": result}
@@ -146,12 +148,12 @@ def build_graph(deps: Deps) -> Any:
 
     async def save(state: SourceState) -> SourceState:
         extracted = state["extracted"]
-        # If the LLM failed on part of the page, do not remember the page's fingerprint,
-        # so it is extracted again next week. What was found is still saved.
-        remember_hash = not extracted.errors and not extracted.invalid_parts
+        # Only a complete extraction marks the page as extracted. If the LLM failed on part
+        # of the page, it is extracted again next run. What was found is still saved.
+        mark_extracted = not extracted.errors and not extracted.invalid_parts
         version = f"{EXTRACT_VERSION}+{extracted.model or 'none'}"
         saved = await asyncio.to_thread(
-            deps.store.save, state["fetched"], state["validated"], version, remember_hash
+            deps.store.save, state["fetched"], state["validated"], version, mark_extracted
         )
         return {"saved": saved}
 
@@ -195,7 +197,7 @@ async def run_sources(
     settings: Settings,
     provider: LLMProvider,
     store: Store,
-    last_hashes: Mapping[str, str],
+    extracted_hashes: Mapping[str, str],
     force: bool = False,
     today: date | None = None,
 ) -> list[SourceOutcome]:
@@ -211,7 +213,7 @@ async def run_sources(
             client=client,
             provider=provider,
             store=store,
-            last_hashes=last_hashes,
+            extracted_hashes=extracted_hashes,
             force=force,
             today=today or date.today(),
             limiter=limiter,

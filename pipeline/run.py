@@ -3,9 +3,9 @@
     uv run python -m pipeline.run fetch                 fetch active sources, save to the database
     uv run python -m pipeline.run fetch --local         save to data/ instead (no database needed)
     uv run python -m pipeline.run fetch --only nust-pg  fetch just one source (even an inactive one)
-    uv run python -m pipeline.run extract --only kaust-timeline --dry-run
-                                                        LLM extraction of the latest saved page;
-                                                        prints JSON, saves nothing
+    uv run python -m pipeline.run extract --only kaust-timeline --dry-run [--provider groq]
+                                                        LLM extraction + validation of the latest
+                                                        saved page; prints JSON, saves nothing
     uv run python -m pipeline.run weekly                fetch, extract, validate and save every
                                                         active source whose page changed
     uv run python -m pipeline.run weekly --only KEY --force
@@ -44,12 +44,12 @@ from pipeline.nodes.extract import ExtractResult, extract_page
 from pipeline.nodes.fetch import fetch_all
 from pipeline.nodes.load_sources import SourcesError, load_sources
 from pipeline.nodes.match import Match, run_matching
-from pipeline.nodes.validate import is_closed
+from pipeline.nodes.validate import ValidatedScholarship, is_closed, validate_extraction
 from pipeline.profile import ProfileError, load_profile
 from pipeline.prompts import EXTRACT_VERSION
 from pipeline.store_local import LocalStore
 
-MAX_ERROR_WIDTH = 60
+MAX_ERROR_WIDTH = 150  # characters of an error shown in the summary tables
 
 
 class SetupError(Exception):
@@ -138,9 +138,13 @@ def run_fetch(settings: Settings, local: bool, only: str | None) -> list[FetchRe
 
 
 def run_extract(
-    settings: Settings, only: str, provider: LLMProvider | None = None
+    settings: Settings,
+    only: str,
+    provider: LLMProvider | None = None,
+    provider_choice: ProviderChoice = "auto",
+    today: date | None = None,
 ) -> dict[str, Any]:
-    """Extract the latest saved snapshot of one source. Saves nothing; returns a report."""
+    """Extract and validate the latest saved snapshot of one source. Saves nothing."""
     if not settings.database_url:
         raise SetupError("DATABASE_URL is not set: extract reads the latest snapshot from it")
     [source] = choose_sources(load_sources(settings.sources_file, include_inactive=True), only)
@@ -153,17 +157,32 @@ def run_extract(
             f"uv run python -m pipeline.run fetch --only {source.key}"
         )
 
-    result = extract_page(snapshot.text, source, provider or build_provider(settings))
-    return extraction_report(result, snapshot)
+    provider = provider or build_provider(settings, provider_choice)
+    result = extract_page(snapshot.text, source, provider)
+    validated = validate_extraction(result.extraction, snapshot.text, today or date.today())
+    return extraction_report(result, snapshot, validated)
 
 
-def extraction_report(result: ExtractResult, snapshot: db.Snapshot) -> dict[str, Any]:
+def extraction_report(
+    result: ExtractResult,
+    snapshot: db.Snapshot,
+    validated: list[ValidatedScholarship] | None = None,
+) -> dict[str, Any]:
     """Everything about one extraction as plain JSON-ready data."""
+    after_validation = [
+        {"name": v.item.name, "status": v.item.status, "intake": v.item.intake,
+         "degree_levels": v.item.degree_levels,
+         "deadlines": [str(d.deadline_date) for d in v.item.deadlines if d.deadline_date],
+         "needs_review": v.needs_review, "notes": v.notes}
+        for v in validated or []
+    ]  # fmt: skip
     return {
         "source": result.source.key,
         "snapshot_id": str(snapshot.id),
         "snapshot_fetched_at": snapshot.fetched_at.isoformat(),
         "page_chars": len(snapshot.text),
+        "sent_chars": result.sent_chars,
+        "parts": result.parts,
         "extract_version": EXTRACT_VERSION,
         "model": result.model,
         "tokens_in": result.tokens_in,
@@ -171,6 +190,7 @@ def extraction_report(result: ExtractResult, snapshot: db.Snapshot) -> dict[str,
         "needs_review": result.needs_review,
         "errors": result.errors,
         "extraction": result.extraction.model_dump(mode="json"),
+        "after_validation": after_validation,
     }
 
 
@@ -198,7 +218,7 @@ def run_weekly(
         try:
             outcomes = asyncio.run(
                 run_sources(chosen, settings, provider, db.PostgresStore(conn),
-                            db.last_hashes(conn), force=force, today=today)
+                            db.last_extracted_hashes(conn), force=force, today=today)
             )  # fmt: skip
         except BaseException as exc:
             db.finish_run(conn, run_id, [], error=f"{type(exc).__name__}: {exc}")
@@ -242,9 +262,10 @@ def format_matches(matches: list[Match], top: int = 5) -> str:
         counts = {s: sum(m.status == s for m in mine) for s in statuses}
         lines.append(f"Matches for {name}: {len(mine)} "
                      f"({', '.join(f'{n} {s}' for s, n in counts.items())})")  # fmt: skip
-        rows = [[str(m.score), m.status, m.scholarship.opportunity_type, m.scholarship.name]
-                for m in mine]  # fmt: skip
-        lines += [_table(["score", "status", "type", "name"], rows), "", f"Top {top} reasons:"]
+        rows = [[str(m.score), m.status, "yes" if m.action_needed else "-",
+                 m.scholarship.opportunity_type, m.scholarship.name] for m in mine]  # fmt: skip
+        headers = ["score", "status", "action", "type", "name"]
+        lines += [_table(headers, rows), "", f"Top {top} reasons:"]
         for rank, m in enumerate(mine[:top], start=1):
             lines.append(f"\n{rank}. {m.scholarship.name}  (score {m.score}, {m.status})")
             for r in m.reasons:
@@ -331,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
     extract = commands.add_parser("extract", help="extract facts from a saved page with the LLM")
     extract.add_argument("--only", metavar="KEY", required=True, help="the source to extract")
     extract.add_argument("--dry-run", action="store_true", help="print the JSON, save nothing")
+    extract.add_argument("--provider", choices=PROVIDER_CHOICES, default="auto",
+                         help="LLM to use (auto = Gemini, then Groq if Gemini fails)")
     weekly = commands.add_parser("weekly", help="fetch, extract, validate and save every source")
     weekly.add_argument("--only", metavar="KEY", help="run only the source with this key")
     weekly.add_argument("--force", action="store_true", help="re-extract unchanged pages too")
@@ -347,10 +370,11 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("pipeline").setLevel(logging.INFO)  # e.g. characters sent to the LLM
 
     try:
         if args.command == "extract":
-            report = run_extract(Settings(), only=args.only)
+            report = run_extract(Settings(), only=args.only, provider_choice=args.provider)
         elif args.command == "weekly":
             outcomes, matches = run_weekly(Settings(), only=args.only, force=args.force,
                                            provider_choice=args.provider)

@@ -10,8 +10,8 @@ from google import genai
 from google.genai import errors
 
 from pipeline.config import Settings
-from pipeline.llm.gemini_provider import GeminiProvider, gemini_retry_after
-from pipeline.llm.groq_provider import GroqProvider
+from pipeline.llm.gemini_provider import GeminiProvider, gemini_retry_after, is_daily_quota
+from pipeline.llm.groq_provider import GroqProvider, groq_error_text
 from pipeline.llm.provider import (
     BaseProvider,
     FallbackProvider,
@@ -19,11 +19,15 @@ from pipeline.llm.provider import (
     Pacer,
     ProviderConfigError,
     ProviderError,
+    TokenWindow,
+    TooLarge,
     TransientError,
     build_provider,
     parse_output,
     parse_seconds,
+    parse_try_again,
     retry_delay,
+    split_in_half,
 )
 from pipeline.schemas import PageExtraction
 from pipeline.tests.conftest import FakeProvider, make_source
@@ -76,6 +80,17 @@ class ScriptedProvider(BaseProvider):
 
 def test_parse_output_valid() -> None:
     assert parse_output(GOOD_JSON, 1, 2).scholarships[0].name == "KAUST Fellowship"
+
+
+def test_parse_output_drops_unknown_empty_keys() -> None:
+    """gpt-oss sometimes adds "status_evidence": null, a key the schema does not have."""
+    extra = '"location": "abroad", "status_evidence": null'
+    answer = GOOD_JSON.replace('"location": "abroad"', extra)
+    assert parse_output(answer, 1, 2).scholarships[0].name == "KAUST Fellowship"
+
+    with_value = GOOD_JSON.replace('"location": "abroad"', '"location": "abroad", "x": "Pakistan"')
+    with pytest.raises(InvalidOutput, match="Extra inputs"):
+        parse_output(with_value, 1, 2)  # an unknown key that carries a value is still wrong
 
 
 @pytest.mark.parametrize("text", ["not json", "", '{"scholarships": [{"name": "x"}]}'])
@@ -435,3 +450,223 @@ def test_groq_timeout_is_not_retried(llm_settings: Settings) -> None:
 def test_groq_client_uses_60_second_timeout(llm_settings: Settings) -> None:
     provider = GroqProvider(llm_settings)
     assert provider._client.timeout == 60
+
+
+# ---------- Free-tier limits: token window, splitting, Gemini daily quota ----------
+
+
+class FakeClock:
+    """A clock that moves forward only when something sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _groq_with_clock(
+    settings: Settings, *outcomes: Any
+) -> tuple[GroqProvider, FakeGroqCompletions, FakeClock]:
+    completions = FakeGroqCompletions(*outcomes)
+    client = cast(groq.Groq, SimpleNamespace(chat=SimpleNamespace(completions=completions)))
+    clock = FakeClock()
+    provider = GroqProvider(settings, client=client, sleep=clock.sleep, clock=clock)
+    return provider, completions, clock
+
+
+def _groq_error(cls: Any, status: int, error: dict[str, Any]) -> Any:
+    response = httpx.Response(status, request=httpx.Request("POST", "https://api.groq.com"))
+    return cls(error.get("message", "error"), response=response, body={"error": error})
+
+
+def _long_text(chars: int) -> str:
+    line = "Applications for the MS programme close on 15 January 2027 for everyone.\n"
+    return line * (chars // len(line))
+
+
+def test_token_window_waits_until_the_request_fits() -> None:
+    clock = FakeClock()
+    window = TokenWindow(100, clock=clock, sleep=clock.sleep)
+
+    window.reserve(60)
+    clock.now += 10
+    window.reserve(60)  # 120 > 100: wait until the first 60 are older than a minute
+
+    assert clock.sleeps == [pytest.approx(50.1)]
+    with pytest.raises(TooLarge):
+        window.reserve(101)  # can never fit
+
+
+def test_groq_sets_answer_budget_and_low_reasoning(llm_settings: Settings) -> None:
+    provider, completions, _ = _groq_with_clock(llm_settings, _groq_response(GOOD_JSON))
+
+    provider.extract("Deadline: 15 January 2027", make_source())
+
+    call = completions.calls[0]
+    assert call["reasoning_effort"] == "low"
+    assert call["max_completion_tokens"] == 4000  # short page: the full answer budget
+    assert provider.budget == 7200  # 8000 tokens per minute minus a 10% margin
+
+
+def test_groq_waits_for_the_per_minute_token_budget(llm_settings: Settings) -> None:
+    heavy = _groq_response(GOOD_JSON)
+    heavy.usage = SimpleNamespace(prompt_tokens=3000, completion_tokens=2000)
+    provider, completions, clock = _groq_with_clock(llm_settings, heavy, _groq_response(GOOD_JSON))
+
+    provider.extract("page one", make_source())
+    provider.extract("page two", make_source())  # 5000 used + a new request > 7200
+
+    assert len(completions.calls) == 2
+    assert clock.sleeps and clock.sleeps[0] > 50  # waited for the first request to age out
+
+
+def test_groq_text_too_large_for_the_budget_is_split_in_half(llm_settings: Settings) -> None:
+    text = _long_text(20_000)  # about 6,700 estimated tokens: no room left for the answer
+    provider, completions, _ = _groq_with_clock(llm_settings, *[_groq_response(GOOD_JSON)] * 4)
+
+    page, tokens_in, _ = provider.extract(text, make_source())
+
+    sent = [call["messages"][1]["content"] for call in completions.calls]
+    assert len(sent) >= 2
+    assert all(len(s) < len(text) for s in sent)
+    assert len(page.scholarships) == len(sent)  # results of the halves are combined
+    assert tokens_in == 900 * len(sent)
+
+
+def test_groq_413_splits_the_text(llm_settings: Settings) -> None:
+    too_large = _groq_error(groq.APIStatusError, 413, {"message": "Request too large"})
+    provider, completions, _ = _groq_with_clock(
+        llm_settings, too_large, _groq_response(GOOD_JSON), _groq_response(GOOD_JSON)
+    )
+
+    page, _, _ = provider.extract(_long_text(4000), make_source())
+
+    assert len(completions.calls) == 3
+    assert len(page.scholarships) == 2
+
+
+def test_groq_answer_out_of_tokens_splits_the_text(llm_settings: Settings) -> None:
+    """The polimi-merit error: HTTP 400 json_validate_failed, max completion tokens reached."""
+    out_of_tokens = _groq_error(groq.BadRequestError, 400, {
+        "message": "Failed to generate JSON. Please adjust your prompt.",
+        "type": "invalid_request_error", "code": "json_validate_failed",
+        "failed_generation": "max completion tokens reached before generating a valid document",
+    })  # fmt: skip
+    provider, completions, _ = _groq_with_clock(
+        llm_settings, out_of_tokens, _groq_response(GOOD_JSON), _groq_response(GOOD_JSON)
+    )
+
+    provider.extract(_long_text(4000), make_source())
+
+    assert len(completions.calls) == 3
+
+
+def test_groq_cut_off_answer_splits_the_text(llm_settings: Settings) -> None:
+    cut = _groq_response(GOOD_JSON)
+    cut.choices[0].finish_reason = "length"
+    provider, completions, _ = _groq_with_clock(
+        llm_settings, cut, _groq_response(GOOD_JSON), _groq_response(GOOD_JSON)
+    )
+    provider.extract(_long_text(4000), make_source())
+    assert len(completions.calls) == 3
+
+
+def test_groq_other_invalid_json_is_invalid_output(llm_settings: Settings) -> None:
+    bad_json = _groq_error(groq.BadRequestError, 400, {
+        "message": "Failed to generate JSON.", "code": "json_validate_failed",
+        "failed_generation": '{"scholarships": [{"name": 5}]}',
+    })  # fmt: skip
+    provider, _, _ = _groq_with_clock(llm_settings, bad_json)
+
+    with pytest.raises(InvalidOutput, match="json_validate_failed"):
+        provider.extract("page", make_source())
+
+
+def test_groq_429_waits_try_again_time_up_to_five_tries(llm_settings: Settings) -> None:
+    message = ("Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): "
+               "Limit 8000, Used 4177, Requested 7807. Please try again in 7.5s.")  # fmt: skip
+    limited = _groq_error(groq.RateLimitError, 429, {"message": message, "code": "rate_limit"})
+    provider, completions, clock = _groq_with_clock(
+        llm_settings, *[limited] * 4, _groq_response(GOOD_JSON)
+    )
+
+    provider.extract("page", make_source())
+
+    assert len(completions.calls) == 5
+    assert clock.sleeps == [7.5] * 4
+
+    provider, completions, _ = _groq_with_clock(llm_settings, *[limited] * 6)
+    with pytest.raises(ProviderError, match="try again in 7.5s"):
+        provider.extract("page", make_source())
+    assert len(completions.calls) == 5
+
+
+def test_groq_error_text_shows_the_message() -> None:
+    error = _groq_error(groq.BadRequestError, 400, {
+        "message": "Failed to generate JSON.", "code": "json_validate_failed",
+        "failed_generation": "max completion tokens reached"})  # fmt: skip
+    assert groq_error_text(error) == (
+        "HTTP 400 json_validate_failed: Failed to generate JSON. (max completion tokens reached)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "seconds"),
+    [
+        ("Please try again in 29.88s. Need more tokens?", 29.88),
+        ("Please try again in 1m2.5s.", 62.5),
+        ("Please try again in 2m.", 120.0),
+        ("Please try again in 1h2m3s.", 3723.0),
+        ("Please try again in 45ms. Need more tokens?", 0.045),  # not 45 minutes!
+        ("Please try again later.", None),
+    ],
+)
+def test_parse_try_again(message: str, seconds: float | None) -> None:
+    assert parse_try_again(message) == seconds
+
+
+def test_split_in_half_cuts_at_a_line_break() -> None:
+    first, second = split_in_half("aaaa\nbbbb\ncccc\ndddd")
+    assert (first, second) == ("aaaa\nbbbb", "cccc\ndddd")
+    assert split_in_half("x" * 10) == ("x" * 5, "x" * 5)
+
+
+DAILY_QUOTA = errors.APIError(429, {"error": {
+    "code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota.",
+    "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+        {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}],
+}})  # fmt: skip
+
+
+def test_gemini_daily_quota_stops_gemini_for_the_run(
+    llm_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    gemini, models = _gemini(llm_settings, DAILY_QUOTA, _gemini_response(GOOD_JSON))
+    groq_provider, completions, _ = _groq_with_clock(
+        llm_settings, _groq_response(GOOD_JSON), _groq_response(GOOD_JSON)
+    )
+    provider = FallbackProvider(gemini, groq_provider)
+
+    provider.extract("page one", make_source())
+    provider.extract("page two", make_source())
+
+    assert len(models.calls) == 1  # no retry, and never called again after the quota error
+    assert not gemini.available
+    assert len(completions.calls) == 2  # both pages went to Groq
+    quota_logs = [r for r in caplog.records if "daily request quota" in r.getMessage()]
+    assert len(quota_logs) == 1
+    assert not any("falling back" in r.getMessage() for r in caplog.records)
+
+
+def test_gemini_per_minute_429_is_not_the_daily_quota() -> None:
+    per_minute = errors.APIError(429, {"error": {"code": 429, "message": "quota", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+            {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}})  # fmt: skip
+    assert not is_daily_quota(per_minute)
+    assert is_daily_quota(DAILY_QUOTA)

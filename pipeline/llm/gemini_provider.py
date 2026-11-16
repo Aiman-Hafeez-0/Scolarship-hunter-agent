@@ -1,5 +1,10 @@
-"""Gemini through Google's official `google-genai` SDK, with JSON-schema output."""
+"""Gemini through Google's official `google-genai` SDK, with JSON-schema output.
 
+When a 429 says the daily request quota is used up, Gemini is not called again for the rest
+of the run (logged once); FallbackProvider then sends every page straight to Groq.
+"""
+
+import logging
 import time
 from collections.abc import Callable
 from typing import Any
@@ -11,6 +16,25 @@ from google.genai import errors, types
 from pipeline.config import Settings
 from pipeline.llm.provider import BaseProvider, ProviderError, TransientError, parse_seconds
 from pipeline.schemas import llm_json_schema
+
+logger = logging.getLogger(__name__)
+
+
+def is_daily_quota(exc: errors.APIError) -> bool:
+    """True if a 429 is about the per-day quota (not the per-minute one).
+
+    Gemini names the quota in the error body, e.g. quotaId
+    "GenerateRequestsPerDayPerProjectPerModel-FreeTier".
+    """
+    body: Any = exc.details
+    details = body.get("error", {}).get("details", []) if isinstance(body, dict) else []
+    for detail in details if isinstance(details, list) else []:
+        violations = detail.get("violations", []) if isinstance(detail, dict) else []
+        for violation in violations if isinstance(violations, list) else []:
+            if isinstance(violation, dict) and "PerDay" in str(violation.get("quotaId", "")):
+                return True
+    message = str(exc.message or "").lower()
+    return "per day" in message or "perday" in message
 
 
 def gemini_retry_after(exc: errors.APIError) -> float | None:
@@ -59,6 +83,11 @@ class GeminiProvider(BaseProvider):
                 model=self.name, contents=user, config=config
             )
         except errors.APIError as exc:
+            if exc.code == 429 and is_daily_quota(exc):
+                self.available = False
+                logger.warning("%s: daily request quota used up; not calling Gemini again "
+                               "in this run", self.name)  # fmt: skip
+                raise ProviderError(f"{self.name}: daily quota used up (HTTP 429)") from exc
             if exc.code == 429:
                 raise TransientError(f"HTTP 429: {exc.message or exc}", status=429,
                                      retry_after=gemini_retry_after(exc)) from exc  # fmt: skip

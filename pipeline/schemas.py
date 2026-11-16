@@ -64,10 +64,19 @@ class ScholarshipExtraction(_Strict):
     opportunity_type: OpportunityType
     location: Location
     campus: str | None = None
-    intake: str | None = None
+    intake: str | None = Field(
+        default=None, description='The intake exactly as written, e.g. "Spring 2027".'
+    )
+    intake_evidence: str | None = Field(
+        default=None, description="Exact quote that names the intake."
+    )
     entry_tests: list[str] = Field(default_factory=list)
     degree_levels: list[Literal["bachelor", "master", "phd", "research", "other"]] = Field(
         default_factory=list
+    )
+    degree_levels_evidence: str | None = Field(
+        default=None,
+        description="Exact quote (or the item's name as written) with the degree words.",
     )
     fields_of_study: list[str] = Field(default_factory=list)
     funding_type: Literal["full", "partial", "tuition_only", "unknown"] = "unknown"

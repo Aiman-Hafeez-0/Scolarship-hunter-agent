@@ -38,11 +38,11 @@ class FakeStore:
         result: FetchResult,
         items: list[ValidatedScholarship],
         extraction_version: str,
-        remember_hash: bool,
+        mark_extracted: bool,
     ) -> int:
         if result.source.key == self.fail_for:
             raise RuntimeError("database is down")
-        self.saved[result.source.key] = (items, extraction_version, remember_hash)
+        self.saved[result.source.key] = (items, extraction_version, mark_extracted)
         return len(items)
 
 
@@ -81,9 +81,9 @@ async def test_new_page_is_extracted_validated_and_saved(
     assert outcome.error is None
     assert outcome.fetched.change is Change.NEW
     assert outcome.saved == 1
-    items, version, remember_hash = store.saved["good"]
-    assert version == "extract_v1+fake-model"
-    assert remember_hash is True
+    items, version, mark_extracted = store.saved["good"]
+    assert version == "extract_v2+fake-model"
+    assert mark_extracted is True
     assert not items[0].needs_review
     assert items[0].evidence[0].score == 100
     assert (outcome.extracted and outcome.extracted.tokens_in) == 100
@@ -127,7 +127,7 @@ async def test_invalid_json_goes_back_to_extract_once(
 
     assert [feedback for _, feedback in provider.calls] == [None, "status: bad value"]
     assert outcome.saved == 1
-    assert store.saved["good"][2] is True  # retry worked: the hash can be remembered
+    assert store.saved["good"][2] is True  # retry worked: the page counts as extracted
     assert outcome.extracted is not None
     assert (outcome.extracted.tokens_in, outcome.extracted.tokens_out) == (150, 25)
 
@@ -142,9 +142,9 @@ async def test_invalid_json_twice_saves_nothing_and_retries_next_week(
                                   settings, provider, store, {}, today=TODAY)  # fmt: skip
 
     assert len(provider.calls) == 2  # no third try
-    items, _, remember_hash = store.saved["good"]
+    items, _, mark_extracted = store.saved["good"]
     assert items == []
-    assert remember_hash is False
+    assert mark_extracted is False
     assert outcome.extracted is not None
     assert outcome.extracted.errors == ["invalid JSON twice: still bad"]
 
@@ -169,7 +169,7 @@ async def test_llm_failure_flags_items_and_forgets_hash(
     await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
                       settings, FakeProvider(ProviderError("quota")), store, {})  # fmt: skip
 
-    assert store.saved["good"] == ([], "extract_v1+none", False)
+    assert store.saved["good"] == ([], "extract_v2+none", False)
 
 
 async def test_one_broken_source_never_stops_the_others(

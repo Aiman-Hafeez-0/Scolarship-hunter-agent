@@ -7,14 +7,19 @@ Errors a provider can raise:
   retry once with the error message as feedback.
 - ProviderError: the call itself failed (bad key, quota used up, still rate limited after
   retries, ...). FallbackProvider then tries the next provider.
+- TooLarge (internal): the request does not fit the provider's limits. BaseProvider then
+  splits the text in half and extracts each half.
 """
 
+import json
 import logging
+import math
 import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Literal, Protocol
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -26,6 +31,8 @@ from pipeline.schemas import PageExtraction
 logger = logging.getLogger(__name__)
 
 MAX_FEEDBACK_CHARS = 2000
+MIN_SPLIT_CHARS = 1000  # never split text shorter than this; give up instead
+CHARS_PER_TOKEN = 3  # a cautious estimate: real text averages about 4 characters per token
 
 
 class ProviderError(Exception):
@@ -62,6 +69,10 @@ class TransientError(Exception):
         self.timed_out = timed_out
 
 
+class TooLarge(Exception):
+    """The request is too big for the provider (HTTP 413, or no room left for the answer)."""
+
+
 class InvalidOutput(Exception):
     """The model's answer did not match the schema. Carries the tokens it still cost."""
 
@@ -81,11 +92,39 @@ class LLMProvider(Protocol):
 
 
 def parse_output(text: str, tokens_in: int, tokens_out: int) -> PageExtraction:
-    """Validate the model's JSON answer, or raise InvalidOutput with the reason."""
+    """Validate the model's JSON answer, or raise InvalidOutput with the reason.
+
+    Some models add keys that are not in the schema with an empty value, such as
+    "status_evidence": null. Such keys say nothing, so they are dropped and the answer is
+    checked again. An unknown key WITH a value is still an error.
+    """
     try:
         return PageExtraction.model_validate_json(text)
     except ValidationError as exc:
-        raise InvalidOutput(str(exc)[:MAX_FEEDBACK_CHARS], tokens_in, tokens_out) from exc
+        error = exc
+    cleaned = _without_empty_extra_keys(text, error)
+    if cleaned is not None:
+        try:
+            return PageExtraction.model_validate(cleaned)
+        except ValidationError as exc:
+            error = exc
+    raise InvalidOutput(str(error)[:MAX_FEEDBACK_CHARS], tokens_in, tokens_out) from error
+
+
+def _without_empty_extra_keys(text: str, error: ValidationError) -> Any | None:
+    """The answer without unknown empty keys, or None if it has other problems too."""
+    problems = error.errors()
+    if not all(p["type"] == "extra_forbidden" and p["input"] in (None, "", [], {})
+               for p in problems):  # fmt: skip
+        return None
+    data = json.loads(text)
+    for problem in problems:
+        *path, key = problem["loc"]
+        node = data
+        for step in path:
+            node = node[step]
+        node.pop(key, None)
+    return data
 
 
 class Pacer:
@@ -126,6 +165,77 @@ def retry_delay(exc: TransientError, settings: Settings) -> float | None:
     return settings.llm_retry_backoff_s
 
 
+def parse_try_again(message: str) -> float | None:
+    """The wait in "Please try again in 29.88s" / "1m2.5s" / "2m" / "45ms", in seconds."""
+    match = re.search(r"try again in\s+((?:\d+(?:\.\d+)?(?:ms|h|m|s))+)", message)
+    if match is None:
+        return None
+    unit_seconds = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+    parts = re.findall(r"(\d+(?:\.\d+)?)(ms|h|m|s)", match.group(1))
+    return sum(float(number) * unit_seconds[unit] for number, unit in parts)
+
+
+def estimate_tokens(text: str) -> int:
+    """A cautious token count for a text (it is better to guess too many than too few)."""
+    return math.ceil(len(text) / CHARS_PER_TOKEN)
+
+
+def split_in_half(text: str) -> tuple[str, str]:
+    """Cut text in two at the line break (or else the space) nearest the middle."""
+    middle = len(text) // 2
+    for separator in ("\n", " "):
+        before, after = text.rfind(separator, 0, middle), text.find(separator, middle)
+        cuts = [c for c in (before, after) if c > 0]
+        if cuts:
+            cut = min(cuts, key=lambda c: abs(c - middle))
+            return text[:cut].strip(), text[cut:].strip()
+    return text[:middle], text[middle:]
+
+
+@dataclass
+class _Use:
+    time: float
+    tokens: int
+
+
+class TokenWindow:
+    """Keep the tokens used in any 60 seconds under `limit` by waiting before a request.
+
+    reserve(n) waits until n more tokens fit, then records them. The caller can correct the
+    record afterwards with the real count (use.tokens = ...).
+    """
+
+    def __init__(
+        self,
+        limit: int,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        window_s: float = 60.0,
+    ) -> None:
+        self.limit = limit
+        self.window_s = window_s
+        self._clock = clock
+        self._sleep = sleep
+        self._uses: list[_Use] = []
+
+    def used(self) -> int:
+        cutoff = self._clock() - self.window_s
+        self._uses = [u for u in self._uses if u.time > cutoff]
+        return sum(u.tokens for u in self._uses)
+
+    def reserve(self, tokens: int) -> _Use:
+        if tokens > self.limit:
+            raise TooLarge(f"needs about {tokens} tokens, more than {self.limit} per minute")
+        while self.used() + tokens > self.limit:
+            wait = self._uses[0].time + self.window_s - self._clock() + 0.1
+            logger.info("waiting %.0f s for the per-minute token limit (%d used, %d needed)",
+                        wait, self.used(), tokens)  # fmt: skip
+            self._sleep(max(wait, 0.1))
+        use = _Use(self._clock(), tokens)
+        self._uses.append(use)
+        return use
+
+
 def parse_seconds(value: object) -> float | None:
     """ "17", "17s", "1.5s" or 17 -> seconds as a float; anything else -> None."""
     match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*s?\s*", str(value)) if value is not None else None
@@ -148,6 +258,8 @@ class BaseProvider(ABC):
     ) -> None:
         self.name = model
         self.last_model = model
+        self.available = True  # False once the daily quota is used up: not called again
+        self.rate_limit_tries = settings.llm_max_tries  # calls per request after HTTP 429
         self._settings = settings
         self._sleep = sleep
         self._pacer = Pacer(settings.llm_min_interval_s, sleep=sleep)
@@ -155,25 +267,40 @@ class BaseProvider(ABC):
     def extract(
         self, page_text: str, source: Source, feedback: str | None = None
     ) -> tuple[PageExtraction, int, int]:
+        """Extract the text; if the request is too large, extract each half instead."""
+        if not self.available:
+            raise ProviderError(f"{self.name}: daily quota used up, not called again this run")
         system = extract_system_prompt(source)
         user = extract_user_message(page_text, feedback)
-        text, tokens_in, tokens_out = self._call_with_retries(system, user)
+        try:
+            text, tokens_in, tokens_out = self._call_with_retries(system, user)
+        except TooLarge as exc:
+            if len(page_text) < MIN_SPLIT_CHARS:
+                raise ProviderError(f"{self.name}: request too large: {exc}") from exc
+            first, second = split_in_half(page_text)
+            logger.info("%s: %s; splitting %d chars into %d + %d", self.name, exc,
+                        len(page_text), len(first), len(second))  # fmt: skip
+            page_a, in_a, out_a = self.extract(first, source, feedback)
+            page_b, in_b, out_b = self.extract(second, source, feedback)
+            both = PageExtraction(scholarships=page_a.scholarships + page_b.scholarships)
+            return both, in_a + in_b, out_a + out_b
         self.last_model = self.name
         return parse_output(text, tokens_in, tokens_out), tokens_in, tokens_out
 
     def _call_with_retries(self, system: str, user: str) -> tuple[str, int, int]:
-        tries = max(1, self._settings.llm_max_tries)
-        for attempt in range(1, tries + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             self._pacer.wait()
             try:
                 return self._call(system, user)
             except TransientError as exc:
+                limit = self.rate_limit_tries if exc.status == 429 else self._settings.llm_max_tries
                 delay = retry_delay(exc, self._settings)
-                if delay is None or attempt == tries:
+                if delay is None or attempt >= max(1, limit):
                     raise ProviderError(f"{self.name}: {exc}") from exc
                 logger.warning("%s: %s; retrying in %.0f s", self.name, exc, delay)
                 self._sleep(delay)
-        raise AssertionError("unreachable")  # the loop always returns or raises
 
     @abstractmethod
     def _call(self, system: str, user: str) -> tuple[str, int, int]: ...
@@ -194,14 +321,18 @@ class FallbackProvider:
     def extract(
         self, page_text: str, source: Source, feedback: str | None = None
     ) -> tuple[PageExtraction, int, int]:
-        try:
-            result = self.primary.extract(page_text, source, feedback)
-            self.last_model = self.primary.last_model
-        except ProviderError as exc:
-            logger.warning("%s failed (%s); falling back to %s", self.primary.name, exc,
-                           self.secondary.name)  # fmt: skip
-            result = self.secondary.extract(page_text, source, feedback)
-            self.last_model = self.secondary.last_model
+        # A primary whose daily quota is used up is skipped quietly (it logged that once).
+        if getattr(self.primary, "available", True):
+            try:
+                result = self.primary.extract(page_text, source, feedback)
+                self.last_model = self.primary.last_model
+                return result
+            except ProviderError as exc:
+                if getattr(self.primary, "available", True):
+                    logger.warning("%s failed (%s); falling back to %s", self.primary.name,
+                                   exc, self.secondary.name)  # fmt: skip
+        result = self.secondary.extract(page_text, source, feedback)
+        self.last_model = self.secondary.last_model
         return result
 
 

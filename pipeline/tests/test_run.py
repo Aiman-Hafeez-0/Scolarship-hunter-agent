@@ -15,7 +15,7 @@ from pipeline.config import Settings
 from pipeline.graph import SourceOutcome
 from pipeline.models import Change, FetchStatus
 from pipeline.nodes.extract import extract_page
-from pipeline.nodes.validate import ValidatedScholarship
+from pipeline.nodes.validate import ValidatedScholarship, validate_extraction
 from pipeline.profile import ProfileError
 from pipeline.run import (
     SetupError,
@@ -161,7 +161,7 @@ def test_extraction_report() -> None:
     assert report["source"] == "example"
     assert report["snapshot_fetched_at"] == "2026-11-14T09:00:00+00:00"
     assert report["page_chars"] == 9
-    assert report["extract_version"] == "extract_v1"
+    assert report["extract_version"] == "extract_v2"
     assert report["model"] == "fake-model"
     assert (report["tokens_in"], report["tokens_out"]) == (100, 20)
     assert report["needs_review"] is False
@@ -271,3 +271,53 @@ def test_database_error_hides_password(
     err = capsys.readouterr().err
     assert "s3cret" not in err
     assert "postgresql://me:***@db.example.com/x" in err
+
+
+# ---------- extract --provider, validation in the report, long errors ----------
+
+
+def test_extract_passes_provider_choice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_extract(settings: Settings, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"needs_review": False}
+
+    monkeypatch.setattr("pipeline.run.run_extract", fake_extract)
+    assert main(["extract", "--only", "kaust-timeline", "--dry-run", "--provider", "groq"]) == 0
+    assert seen == {"only": "kaust-timeline", "provider_choice": "groq"}
+
+
+def test_extraction_report_includes_validation_and_sizes() -> None:
+    text = "MS Admissions Spring 2027. Apply by 15 January 2027."
+    item = ScholarshipExtraction(
+        name="MS Admission", opportunity_type="admission", location="pakistan", status="open",
+        intake="Spring 2027", intake_evidence="MS Admissions Spring 2027.",
+        deadlines=[DeadlineItem(label="Apply", deadline_date=date(2027, 1, 15),
+                                evidence="Apply by 15 January 2027.")],
+    )  # fmt: skip
+    result = extract_page(text, make_source(), FakeProvider(PageExtraction(scholarships=[item])))
+    snapshot = db.Snapshot(uuid.UUID(int=1), datetime(2026, 11, 14, tzinfo=UTC), text)
+
+    report = extraction_report(result, snapshot, validate_extraction(
+        result.extraction, text, date(2026, 11, 15)))  # fmt: skip
+
+    sizes = (report["page_chars"], report["sent_chars"], report["parts"])
+    assert sizes == (len(text), len(text), 1)
+    [after] = report["after_validation"]
+    assert after["status"] == "open"
+    assert after["intake"] == "Spring 2027"
+    assert after["deadlines"] == ["2027-01-15"]
+    assert after["needs_review"] is False
+
+
+def test_summary_shows_150_characters_of_an_error() -> None:
+    error = "LLM call failed: openai/gpt-oss-120b: HTTP 400 json_validate_failed: " + "x" * 200
+    outcome = _outcome("polimi-merit", status=FetchStatus.FAILED, error=error)
+    note = format_weekly_summary([outcome]).splitlines()[2]
+
+    assert "HTTP 400 json_validate_failed" in note
+    shown = note[note.index("LLM call failed"):]
+    assert len(shown) == 150 and shown.endswith("...")

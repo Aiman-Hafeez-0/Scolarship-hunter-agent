@@ -3,7 +3,7 @@
 from typing import Any
 
 from pipeline.llm.provider import InvalidOutput, ProviderError
-from pipeline.nodes.extract import extract_page, merge_by_name, split_text
+from pipeline.nodes.extract import extract_page, llm_chunks, merge_by_name, split_text
 from pipeline.schemas import DeadlineItem, PageExtraction, ScholarshipExtraction
 from pipeline.tests.conftest import FakeProvider, make_source
 
@@ -72,7 +72,7 @@ def test_unexpected_error_never_crashes() -> None:
 
 
 def test_long_page_is_split_and_merged() -> None:
-    part = "x" * 50_000
+    part = "x" * 7_000  # two parts together are over LLM_CHUNK_CHARS (12,000)
     text = f"Programme A\n{part}\n\nDeadlines\n{part}"
     provider = FakeProvider(
         PageExtraction(scholarships=[scholarship("Programme A", deadlines=[deadline("Round 1")])]),
@@ -93,7 +93,7 @@ def test_long_page_is_split_and_merged() -> None:
 
 
 def test_one_failed_part_keeps_the_others() -> None:
-    part = "x" * 50_000
+    part = "x" * 7_000  # two parts together are over LLM_CHUNK_CHARS (12,000)
     text = f"Part one\n{part}\n\nPart two\n{part}"
     provider = FakeProvider(
         ProviderError("timeout"), PageExtraction(scholarships=[scholarship("Programme B")])
@@ -153,3 +153,34 @@ def test_merge_keeps_first_known_value() -> None:
     first = scholarship("A", funding_type="partial")
     second = scholarship("A", funding_type="full")
     assert merge_by_name([first, second])[0].funding_type == "partial"
+
+
+# ---------- Focused text ----------
+
+
+def test_only_the_focused_text_is_sent_and_sizes_are_recorded() -> None:
+    filler = "\n".join(f"Our campus has a lovely garden number {n} with trees." for n in range(40))
+    text = f"{filler}\nMS admission deadline: 15 January 2027.\n{filler}"
+    provider = FakeProvider(PageExtraction())
+
+    result = extract_page(text, make_source(), provider)
+
+    [(sent, _)] = provider.calls
+    assert "MS admission deadline: 15 January 2027." in sent
+    assert len(sent) < len(text) / 5  # the deadline line plus 2 lines of context each side
+    assert (result.page_chars, result.sent_chars, result.parts) == (len(text), len(sent), 1)
+
+
+def test_focused_text_over_12000_chars_is_split() -> None:
+    line = "Scholarship applications for MS students close on 15 January 2027.\n"
+    text = line * 300  # about 20,000 relevant characters
+    provider = FakeProvider(PageExtraction(), PageExtraction())
+
+    result = extract_page(text, make_source(), provider)
+
+    assert result.parts == 2
+    assert all(len(sent) <= 12_000 for sent, _ in provider.calls)
+
+
+def test_llm_chunks_falls_back_to_full_text_when_nothing_is_relevant() -> None:
+    assert llm_chunks("Welcome to our website.") == ["Welcome to our website."]

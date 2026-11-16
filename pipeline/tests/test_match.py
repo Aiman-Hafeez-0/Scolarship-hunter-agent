@@ -49,7 +49,7 @@ def test_format_matches() -> None:
     lines = text.splitlines()
 
     assert lines[0] == "Matches for Test Student: 3 (1 eligible, 1 maybe, 1 not_eligible)"
-    assert lines[3].split()[:3] == ["100", "eligible", "scholarship"]
+    assert lines[3].split()[:4] == ["100", "eligible", "yes", "scholarship"]
     assert "1. AI Fellowship  (score 100, eligible)" in text
     assert "Unclear Programme  (score" not in text  # only the top 1 gets reasons
     assert "pass     open_deadline    next deadline 2026-11-25 (in 10 days)" in text
@@ -57,3 +57,16 @@ def test_format_matches() -> None:
 
 def test_format_no_matches_explains_next_step() -> None:
     assert "fill in profile.yaml" in format_matches([])
+
+
+def test_action_needed_only_with_a_dated_deadline_ahead() -> None:
+    undated = ScholarshipFacts(name="No Dates", id="5", status="open", open_to_pakistan="yes")
+    matches = match_all([("p1", ME)], [*scholarships(), undated], TODAY)
+
+    action = {m.scholarship.name: m.action_needed for m in matches}
+    assert action == {
+        "AI Fellowship": True,
+        "Unclear Programme": True,  # "maybe", but its deadline is ahead: worth checking
+        "Med Grant": False,  # not eligible
+        "No Dates": False,  # no dated deadline: never "action needed", even if "open"
+    }

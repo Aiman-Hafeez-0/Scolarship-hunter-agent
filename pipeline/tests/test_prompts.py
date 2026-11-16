@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pipeline.prompts import extract_system_prompt, extract_user_message
+from pipeline.prompts import EXTRACT_VERSION, extract_system_prompt, extract_user_message
 from pipeline.tests.conftest import make_source
 
 
@@ -28,3 +28,13 @@ def test_user_message_includes_feedback() -> None:
     message = extract_user_message("Deadline 1 May", feedback="deadlines.0.evidence missing")
     assert message.startswith("<page>\nDeadline 1 May\n</page>")
     assert "deadlines.0.evidence missing" in message
+
+
+def test_extract_v2_rules() -> None:
+    prompt = extract_system_prompt(make_source(), today=date(2026, 11, 16))
+
+    assert EXTRACT_VERSION == "extract_v2"
+    assert "degree_levels_evidence" in prompt
+    assert "intake_evidence" in prompt and "Spring 2027" in prompt
+    assert "MS and PhD" in prompt
+    assert "excerpt" in prompt  # the model knows it may see only the relevant lines

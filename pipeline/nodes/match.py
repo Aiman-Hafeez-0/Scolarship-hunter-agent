@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from datetime import date
 
 from pipeline import db
-from pipeline.matching.rules import RuleResult, ScholarshipFacts, Status, evaluate, overall_status
+from pipeline.matching.rules import (
+    RuleResult,
+    ScholarshipFacts,
+    Status,
+    evaluate,
+    needs_action,
+    overall_status,
+)
 from pipeline.matching.score import match_score
 from pipeline.profile import Profile
 
@@ -20,6 +27,8 @@ class Match:
     status: Status
     score: int
     reasons: list[RuleResult]
+    # Not ruled out, and a dated deadline is still ahead. Never true without a dated deadline.
+    action_needed: bool = False
 
 
 def match_one(
@@ -27,8 +36,9 @@ def match_one(
 ) -> Match:
     reasons = evaluate(profile, scholarship, today)
     status = overall_status(reasons)
+    action = status != "not_eligible" and needs_action(scholarship, today)
     return Match(profile_id, profile.full_name, scholarship, status,
-                 match_score(scholarship, status, today), reasons)  # fmt: skip
+                 match_score(scholarship, status, today), reasons, action)  # fmt: skip
 
 
 def match_all(

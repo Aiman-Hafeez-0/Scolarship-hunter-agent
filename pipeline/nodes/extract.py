@@ -1,21 +1,29 @@
 """Run LLM extraction on one page's text.
 
-- Long pages (over MAX_CHARS) are split at headings, and the parts are extracted one by one.
-  Results that share a scholarship name are merged into one entry.
+- Only a focused copy of the page is sent (see pipeline/focus.py): the relevant lines and
+  their context. If nothing looks relevant, the full text is sent instead.
+- Focused text over LLM_CHUNK_CHARS is split at headings, and the parts are extracted one by
+  one. Results that share a scholarship name are merged into one entry.
+- The quote check (validate.py) always uses the FULL page text, not the focused copy.
 - If the model's JSON does not match the schema, that part is asked once more with the
   validation error (extract_retry). If that fails too, the result is marked needs_review.
   extract_page does both passes; the LangGraph pipeline calls them as separate steps.
 - Like fetching, this never raises: problems end up in `errors` with needs_review=True.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from pipeline.focus import focus_text
 from pipeline.llm.provider import InvalidOutput, LLMProvider, ProviderError
 from pipeline.models import Source
 from pipeline.schemas import PageExtraction, ScholarshipExtraction
 
-MAX_CHARS = 80_000
+logger = logging.getLogger(__name__)
+
+LLM_CHUNK_CHARS = 12_000  # at most this much text per LLM call (free-tier token limits)
+MAX_CHARS = LLM_CHUNK_CHARS
 MAX_HEADING_CHARS = 80
 _UNKNOWN_VALUES = (None, "unknown", "unclear")
 
@@ -32,6 +40,9 @@ class ExtractResult:
     # Parts whose JSON was invalid on the first try: part index -> validation error.
     invalid_parts: dict[int, str] = field(default_factory=dict)
     found: list[ScholarshipExtraction] = field(default_factory=list)  # before merging
+    page_chars: int = 0  # length of the full page text
+    sent_chars: int = 0  # length of the text sent to the LLM (focused copy)
+    parts: int = 0  # how many pieces it was split into (one LLM call each, at least)
 
 
 def extract_page(page_text: str, source: Source, provider: LLMProvider) -> ExtractResult:
@@ -45,7 +56,12 @@ def extract_page(page_text: str, source: Source, provider: LLMProvider) -> Extra
 def extract_first(page_text: str, source: Source, provider: LLMProvider) -> ExtractResult:
     """First pass over every part of the page. Invalid answers go to `invalid_parts`."""
     result = ExtractResult(source=source, extraction=PageExtraction())
-    chunks = split_text(page_text)
+    chunks = llm_chunks(page_text)
+    result.page_chars = len(page_text)
+    result.sent_chars = sum(len(c) for c in chunks)
+    result.parts = len(chunks)
+    logger.info("%s: %d chars on the page -> %d chars sent to the LLM in %d part(s)",
+                source.key, result.page_chars, result.sent_chars, result.parts)  # fmt: skip
     for index, chunk in enumerate(chunks):
         _extract_part(chunk, index, len(chunks), provider, result, feedback=None)
     result.extraction = PageExtraction(scholarships=merge_by_name(result.found))
@@ -54,7 +70,7 @@ def extract_first(page_text: str, source: Source, provider: LLMProvider) -> Extr
 
 def extract_retry(page_text: str, result: ExtractResult, provider: LLMProvider) -> None:
     """Ask again for each invalid part, sending the validation error as feedback."""
-    chunks = split_text(page_text)
+    chunks = llm_chunks(page_text)
     invalid, result.invalid_parts = result.invalid_parts, {}
     for index, error in invalid.items():
         _extract_part(chunks[index], index, len(chunks), provider, result, feedback=error)
@@ -102,7 +118,16 @@ def _first_line(exc: Exception) -> str:
     return text.splitlines()[0] if text else type(exc).__name__
 
 
-# ---------- Splitting long pages ----------
+# ---------- What to send: focused text, in parts ----------
+
+
+def llm_chunks(page_text: str) -> list[str]:
+    """The text to send to the LLM: the focused copy, split into parts of LLM_CHUNK_CHARS."""
+    focused = focus_text(page_text)
+    if not focused:
+        logger.info("no relevant lines found; sending the full text")
+        focused = page_text
+    return split_text(focused, LLM_CHUNK_CHARS)
 
 
 def split_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:

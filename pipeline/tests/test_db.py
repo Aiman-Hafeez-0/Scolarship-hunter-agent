@@ -7,14 +7,20 @@ from typing import Any
 
 import psycopg
 import pytest
+import respx
 
 from pipeline import db
+from pipeline.config import Settings
+from pipeline.graph import SourceOutcome, run_sources
+from pipeline.llm.provider import ProviderError
 from pipeline.migrate import apply_migrations
 from pipeline.models import Change, FetchStatus
+from pipeline.nodes.detect_change import detect_changes
+from pipeline.nodes.fetch import fetch_all
 from pipeline.nodes.validate import ValidatedScholarship, validate_scholarship
 from pipeline.profile import Profile
-from pipeline.schemas import DeadlineItem, Requirement, ScholarshipExtraction
-from pipeline.tests.conftest import make_result, make_source
+from pipeline.schemas import DeadlineItem, PageExtraction, Requirement, ScholarshipExtraction
+from pipeline.tests.conftest import FakeProvider, make_result, make_source
 
 Conn = psycopg.Connection[tuple[object, ...]]
 
@@ -268,13 +274,13 @@ def test_save_extraction_writes_all_tables(conn: Conn) -> None:
     _sync_example(conn, "a")
     db.save_result(conn, make_result("a", PAGE, change=Change.NEW))
 
-    assert db.save_extraction(conn, "a", [_validated()], "extract_v1+fake") == 1
+    assert db.save_extraction(conn, "a", [_validated()], "extract_v2+fake") == 1
 
     row = conn.execute(
         "select name, status::text, extraction_version, needs_review, snapshot_id is not null"
         " from scholarships"
     ).fetchone()
-    assert row == ("MS Admission", "open", "extract_v1+fake", False, True)
+    assert row == ("MS Admission", "open", "extract_v2+fake", False, True)
     assert _rows(conn, "select label, deadline_date, evidence_id is not null from deadlines") == [
         ("Application deadline", date(2027, 1, 15), True)
     ]
@@ -333,14 +339,101 @@ def test_store_saves_snapshot_and_extraction_in_one_transaction(conn: Conn) -> N
     broken.item = broken.item.model_copy(update={"name": None})  # violates "name not null"
 
     with pytest.raises(psycopg.errors.NotNullViolation):
-        store.save(result, [broken], "v1", remember_hash=True)
+        store.save(result, [broken], "v1", mark_extracted=True)
 
     assert _snapshot_count(conn, "a") == 0  # the snapshot was rolled back too
     assert db.last_hashes(conn) == {}
+    assert db.last_extracted_hashes(conn) == {}
 
-    assert store.save(result, [_validated()], "v1", remember_hash=False) == 1
+    assert store.save(result, [_validated()], "v1", mark_extracted=False) == 1
     assert _snapshot_count(conn, "a") == 1
-    assert db.last_hashes(conn) == {}  # not remembered: extracted again next week
+    assert db.last_hashes(conn) == {"a": result.content_hash}  # it was fetched...
+    assert db.last_extracted_hashes(conn) == {}  # ...but not fully extracted: retried next run
+
+    assert store.save(result, [_validated()], "v1", mark_extracted=True) == 1
+    assert db.last_extracted_hashes(conn) == {"a": result.content_hash}
+    assert _snapshot_count(conn, "a") == 1  # same text: no second snapshot
+
+
+# ---------- weekly vs fetch: last_extracted_hash ----------
+
+WEEKLY_URL = "https://example.edu.pk/a"
+WEEKLY_HTML = f"<html><body><p>{PAGE}</p></body></html>"
+
+
+def _page_extraction() -> PageExtraction:
+    return PageExtraction(scholarships=[_validated().item])
+
+
+async def _fetch_command(conn: Conn, settings: Settings) -> None:
+    """What `pipeline.run fetch` does: fetch, compare with last_hash, save. No LLM."""
+    fetched = await fetch_all([make_source(key="a", url=WEEKLY_URL)], settings)
+    for result in detect_changes(fetched, db.last_hashes(conn)):
+        db.save_result(conn, result)
+
+
+async def _weekly(conn: Conn, settings: Settings, provider: FakeProvider) -> SourceOutcome:
+    """What `pipeline.run weekly` does for one source (compares with last_extracted_hash)."""
+    [outcome] = await run_sources(
+        [make_source(key="a", url=WEEKLY_URL)], settings, provider, db.PostgresStore(conn),
+        db.last_extracted_hashes(conn), today=date(2026, 11, 15),
+    )  # fmt: skip
+    return outcome
+
+
+@pytest.fixture
+def weekly_site(mock_http: respx.MockRouter) -> respx.MockRouter:
+    mock_http.get("https://example.edu.pk/robots.txt").respond(404)
+    mock_http.get(WEEKLY_URL).respond(200, html=WEEKLY_HTML)
+    return mock_http
+
+
+async def test_page_fetched_but_never_extracted_is_extracted_by_weekly(
+    conn: Conn, settings: Settings, weekly_site: respx.MockRouter
+) -> None:
+    _sync_example(conn, "a")
+    await _fetch_command(conn, settings)
+    assert "a" in db.last_hashes(conn)  # fetch remembered the page...
+    assert db.last_extracted_hashes(conn) == {}  # ...but never extracted it
+
+    provider = FakeProvider(_page_extraction())
+    outcome = await _weekly(conn, settings, provider)
+
+    assert len(provider.calls) == 1  # sent to the LLM even though last_hash matches
+    assert outcome.saved == 1
+    assert db.last_extracted_hashes(conn) == db.last_hashes(conn)
+    assert _snapshot_count(conn, "a") == 1  # fetch already stored this text
+
+
+async def test_extracted_unchanged_page_is_skipped(
+    conn: Conn, settings: Settings, weekly_site: respx.MockRouter
+) -> None:
+    _sync_example(conn, "a")
+    await _weekly(conn, settings, FakeProvider(_page_extraction()))
+    await _fetch_command(conn, settings)  # a fetch in between changes nothing for weekly
+
+    provider = FakeProvider()  # would fail if it were called
+    outcome = await _weekly(conn, settings, provider)
+
+    assert provider.calls == []
+    assert outcome.fetched.change is Change.UNCHANGED
+    assert outcome.extracted is None
+
+
+async def test_failed_extraction_is_retried_next_run(
+    conn: Conn, settings: Settings, weekly_site: respx.MockRouter
+) -> None:
+    _sync_example(conn, "a")
+    first = await _weekly(conn, settings, FakeProvider(ProviderError("quota")))
+    assert first.extracted is not None and first.extracted.errors
+    assert db.last_extracted_hashes(conn) == {}  # failure: the old value (none) is kept
+
+    provider = FakeProvider(_page_extraction())
+    second = await _weekly(conn, settings, provider)
+
+    assert len(provider.calls) == 1  # same page, but tried again
+    assert second.saved == 1
+    assert db.last_extracted_hashes(conn) == {"a": second.fetched.content_hash}
 
 
 def test_weekly_run_totals_are_recorded(conn: Conn) -> None:

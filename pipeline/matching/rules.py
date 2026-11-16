@@ -96,6 +96,14 @@ def next_deadline(s: ScholarshipFacts, today: date) -> date | None:
     return min(future) if future else None
 
 
+def needs_action(s: ScholarshipFacts, today: date) -> bool:
+    """True only for an item that is not closed and has a dated deadline today or later.
+
+    An item without a dated deadline never needs action: we cannot say when to act.
+    """
+    return s.status != "closed" and next_deadline(s, today) is not None
+
+
 def is_free(fee: str | None) -> bool:
     if not fee:
         return False

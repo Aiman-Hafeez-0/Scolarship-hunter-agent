@@ -7,6 +7,7 @@ import pytest
 
 from pipeline.nodes.validate import (
     date_in_quote,
+    intake_start,
     is_closed,
     quote_score,
     status_after_dates,
@@ -187,10 +188,13 @@ def test_announced_new_cycle_is_not_closed() -> None:
     assert status_after_dates(item(status="upcoming", deadlines=past), TODAY) == "upcoming"
 
 
-def test_no_dated_deadlines_keeps_status() -> None:
-    assert status_after_dates(item(status="open"), TODAY) == "open"
+def test_no_dated_deadline_means_unknown() -> None:
+    # Without a dated deadline we cannot say when to act: never "open" or "upcoming".
+    assert status_after_dates(item(status="open"), TODAY) == "unknown"
+    assert status_after_dates(item(status="upcoming"), TODAY) == "unknown"
     undated = [deadline("a", None)]
-    assert status_after_dates(item(status="unknown", deadlines=undated), TODAY) == "unknown"
+    assert status_after_dates(item(status="open", deadlines=undated), TODAY) == "unknown"
+    assert status_after_dates(item(status="closed"), TODAY) == "closed"  # the page said so
 
 
 def test_validate_sets_closed_status() -> None:
@@ -198,3 +202,62 @@ def test_validate_sets_closed_status() -> None:
     old = deadline("Applications closed on 1 March 2026.", date(2026, 3, 1))
     result = validate_scholarship(item(status="open", deadlines=[old]), page, TODAY)
     assert result.item.status == "closed"
+
+
+# ---------- Intake and degree evidence ----------
+
+INTAKE_PAGE = "MS Admissions Spring 2027 are open.\nFall 2026 intake: classes began in September."
+
+
+def test_intake_and_degree_levels_need_evidence() -> None:
+    good = item(intake="Spring 2027", intake_evidence="MS Admissions Spring 2027 are open.",
+                degree_levels=["master"], degree_levels_evidence="MS Admissions Spring 2027")
+    result = validate_scholarship(good, INTAKE_PAGE, TODAY)
+    assert (result.item.intake, result.item.degree_levels) == ("Spring 2027", ["master"])
+    assert {e.field_path for e in result.evidence} == {"intake", "degree_levels"}
+    assert not result.needs_review
+
+    missing = item(intake="Spring 2027", degree_levels=["phd"],
+                   degree_levels_evidence="PhD programmes for all")  # not on the page
+    result = validate_scholarship(missing, INTAKE_PAGE, TODAY)
+    assert (result.item.intake, result.item.degree_levels) == (None, [])
+    assert result.needs_review
+    assert any(n.startswith("intake has no quote") for n in result.notes)
+
+
+@pytest.mark.parametrize(
+    ("intake", "start"),
+    [
+        ("Fall 2026", date(2026, 9, 1)),
+        ("Autumn 2026", date(2026, 9, 1)),
+        ("Spring 2027", date(2027, 2, 1)),
+        ("spring-2026", date(2026, 2, 1)),
+        ("Fall 2026 and Spring 2027", date(2027, 2, 1)),  # the latest season counts
+        ("2026-27", None),
+        (None, None),
+    ],
+)
+def test_intake_start(intake: str | None, start: date | None) -> None:
+    assert intake_start(intake) == start
+
+
+def test_started_intake_is_closed() -> None:
+    fall = item(status="open", intake="Fall 2026",
+                intake_evidence="Fall 2026 intake: classes began in September.")
+    assert validate_scholarship(fall, INTAKE_PAGE, TODAY).item.status == "closed"
+
+    spring = item(status="open", intake="Spring 2027",
+                  intake_evidence="MS Admissions Spring 2027 are open.",
+                  deadlines=[deadline("MS Admissions Spring 2027 are open.", None)])
+    assert validate_scholarship(spring, INTAKE_PAGE, TODAY).item.status == "unknown"  # no date
+
+
+def test_started_intake_with_deadline_ahead_needs_review() -> None:
+    page = INTAKE_PAGE + "\nApply by 15 January 2027."
+    odd = item(status="open", intake="Fall 2026",
+               intake_evidence="Fall 2026 intake: classes began in September.",
+               deadlines=[deadline("Apply by 15 January 2027.", date(2027, 1, 15))])
+    result = validate_scholarship(odd, page, TODAY)
+    assert result.item.status == "open"
+    assert result.needs_review
+    assert any("has started, but deadline 2027-01-15 is still ahead" in n for n in result.notes)

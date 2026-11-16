@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     llm_max_tries: int = 2  # calls per page and provider (first try + 1 retry), then fall back
     llm_retry_backoff_s: float = 10.0  # wait before retrying a 5xx, or a 429 with no retry-after
     llm_max_retry_wait_s: float = 60.0  # a 429 asking us to wait longer: switch provider now
+
+    # Groq free tier: openai/gpt-oss-120b allows 8000 tokens per minute (prompt + answer).
+    groq_tpm_limit: int = 8000
+    groq_tpm_margin: float = 0.1  # keep 10% of the limit free, because token counts are estimates
+    groq_max_output_tokens: int = 4000  # answer budget (includes the model's reasoning)
+    groq_min_output_tokens: int = 2000  # less room than this: split the text in half instead
+    # Less reasoning leaves more of the answer budget for the JSON itself.
+    groq_reasoning_effort: Literal["none", "default", "low", "medium", "high"] = "low"
+    groq_rate_limit_tries: int = 5  # calls per request when Groq answers 429
 
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")

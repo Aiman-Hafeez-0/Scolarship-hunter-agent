@@ -137,7 +137,7 @@ def test_run_eval_report_and_csv(tmp_path: Path) -> None:
     append_results(csv_row(run, TODAY, "groq"), path)
     rows = list(csv.reader(path.open(encoding="utf-8")))
     assert rows[0] == CSV_HEADER
-    assert rows[1][:8] == ["2026-11-15", "auto", "fake-model", "extract_v1", "1", "1", "2",
+    assert rows[1][:8] == ["2026-11-15", "auto", "fake-model", "extract_v2", "1", "1", "2",
                            "0.5000"]  # fmt: skip
     assert rows[2][1] == "groq"
     assert len(rows) == 3  # header written once
