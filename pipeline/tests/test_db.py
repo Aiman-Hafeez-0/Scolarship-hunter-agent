@@ -169,12 +169,15 @@ def _age_run(conn: Conn, run_id: object, hours: float) -> None:
 
 
 def test_stale_running_runs_are_marked_failed(conn: Conn) -> None:
+    # Create every run before ageing any of them: start_run() itself calls fail_stale_runs(),
+    # so if "stuck" were already 3 h old when the next run starts, start_run() would mark it
+    # failed and the fail_stale_runs() call below would find nothing left to do.
     stuck = db.start_run(conn, "weekly")
-    _age_run(conn, stuck, 3)
     recent = db.start_run(conn, "weekly")
-    _age_run(conn, recent, 1)
     done = db.start_run(conn, "fetch")
     db.finish_run(conn, done, [])
+    _age_run(conn, stuck, 3)
+    _age_run(conn, recent, 1)
     _age_run(conn, done, 5)
 
     assert db.fail_stale_runs(conn) == 1
