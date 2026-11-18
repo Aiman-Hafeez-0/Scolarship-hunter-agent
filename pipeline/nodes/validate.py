@@ -124,9 +124,18 @@ def _month_in_numeric_date(match: re.Match[str], day: int, month: int) -> bool:
 
 
 def validate_extraction(
-    extraction: PageExtraction, page_text: str, today: date
+    extraction: PageExtraction, page_text: str, today: date, location: str | None = None
 ) -> list[ValidatedScholarship]:
-    return [validate_scholarship(item, page_text, today) for item in extraction.scholarships]
+    """Check every item's quotes and dates.
+
+    location is the SOURCE's location (from sources.yaml, never from the LLM). For a source
+    in Pakistan, open_to_pakistan is set to "yes": studying in Pakistan is open to Pakistanis.
+    """
+    results = [validate_scholarship(item, page_text, today) for item in extraction.scholarships]
+    if location == "pakistan":
+        for result in results:
+            result.item = result.item.model_copy(update={"open_to_pakistan": "yes"})
+    return results
 
 
 def validate_scholarship(

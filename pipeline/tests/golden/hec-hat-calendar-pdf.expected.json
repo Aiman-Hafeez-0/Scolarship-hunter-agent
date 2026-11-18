@@ -1,5 +1,6 @@
 {
   "source": "hec-hat-calendar-pdf",
+  "fetched_on": "2026-11-14",
   "notes": "PDF table: 4 blocks of sessions, but the text does not say which block is which test (USAT, HAT, LAT, LAW-GAT); the asterisk note says the HAT and USAT rows were revised, so blocks 3 and 4 are HAT/USAT. Dates are dd.mm.yyyy, some with a leading '*'. Required: last date for online registration and test date. Dates already past are still correct. Deadlines are scored per page, so block-to-test mapping does not matter.",
   "items": [
     {

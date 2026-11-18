@@ -1,5 +1,6 @@
 {
   "source": "turkiye-burslari",
+  "fetched_on": "2026-11-14",
   "notes": "Home page, no dates. Applications are free of charge. Coverage appears only as search-filter labels (Monthly Stipend, Accommodation, ...), so funding_type is not scored.",
   "items": [
     {

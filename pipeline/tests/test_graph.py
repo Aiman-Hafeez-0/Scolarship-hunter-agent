@@ -82,7 +82,7 @@ async def test_new_page_is_extracted_validated_and_saved(
     assert outcome.fetched.change is Change.NEW
     assert outcome.saved == 1
     items, version, mark_extracted = store.saved["good"]
-    assert version == "extract_v2+fake-model"
+    assert version == "extract_v3+fake-model"
     assert mark_extracted is True
     assert not items[0].needs_review
     assert items[0].evidence[0].score == 100
@@ -169,7 +169,7 @@ async def test_llm_failure_flags_items_and_forgets_hash(
     await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
                       settings, FakeProvider(ProviderError("quota")), store, {})  # fmt: skip
 
-    assert store.saved["good"] == ([], "extract_v2+none", False)
+    assert store.saved["good"] == ([], "extract_v3+none", False)
 
 
 async def test_one_broken_source_never_stops_the_others(
@@ -211,7 +211,8 @@ async def test_llm_calls_run_one_at_a_time(site: respx.MockRouter, settings: Set
             self.most_at_once = 0
             self._lock = threading.Lock()
 
-        def extract(self, page_text: str, source: object, feedback: str | None = None) -> Any:
+        def extract(self, page_text: str, source: object, feedback: str | None = None,
+                    today: object = None) -> Any:  # fmt: skip
             with self._lock:
                 self.running += 1
                 self.most_at_once = max(self.most_at_once, self.running)

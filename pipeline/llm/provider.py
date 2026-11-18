@@ -7,8 +7,11 @@ Errors a provider can raise:
   retry once with the error message as feedback.
 - ProviderError: the call itself failed (bad key, quota used up, still rate limited after
   retries, ...). FallbackProvider then tries the next provider.
-- TooLarge (internal): the request does not fit the provider's limits. BaseProvider then
-  splits the text in half and extracts each half.
+- TooLarge (internal): the request does not fit the provider's limits, or the answer was cut
+  off by the output token limit. BaseProvider then splits the text in half and extracts each
+  half (instead of failing, or retrying the same too-long answer).
+
+`today` is written into the prompt, so the model can leave out deadlines long past.
 """
 
 import json
@@ -19,6 +22,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
@@ -70,7 +74,7 @@ class TransientError(Exception):
 
 
 class TooLarge(Exception):
-    """The request is too big for the provider (HTTP 413, or no room left for the answer)."""
+    """Too big: HTTP 413, no room left for the answer, or the answer was cut off."""
 
 
 class InvalidOutput(Exception):
@@ -87,8 +91,27 @@ class LLMProvider(Protocol):
     last_model: str  # the model that produced the most recent answer
 
     def extract(
-        self, page_text: str, source: Source, feedback: str | None = None
+        self,
+        page_text: str,
+        source: Source,
+        feedback: str | None = None,
+        today: date | None = None,
     ) -> tuple[PageExtraction, int, int]: ...
+
+
+def is_cut_off(text: str) -> bool:
+    """True if the answer is JSON that simply stops early (the output token limit was hit).
+
+    Broken JSON that goes on after the error is a different problem (InvalidOutput).
+    """
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        return exc.pos >= len(stripped) - 1
+    return False
 
 
 def parse_output(text: str, tokens_in: int, tokens_out: int) -> PageExtraction:
@@ -265,25 +288,33 @@ class BaseProvider(ABC):
         self._pacer = Pacer(settings.llm_min_interval_s, sleep=sleep)
 
     def extract(
-        self, page_text: str, source: Source, feedback: str | None = None
+        self,
+        page_text: str,
+        source: Source,
+        feedback: str | None = None,
+        today: date | None = None,
     ) -> tuple[PageExtraction, int, int]:
-        """Extract the text; if the request is too large, extract each half instead."""
+        """Extract the text; if it is too large or the answer was cut off, each half instead."""
         if not self.available:
             raise ProviderError(f"{self.name}: daily quota used up, not called again this run")
-        system = extract_system_prompt(source)
+        system = extract_system_prompt(source, today)
         user = extract_user_message(page_text, feedback)
+        spent_in = spent_out = 0  # tokens of a cut-off answer: paid for, but unusable
         try:
             text, tokens_in, tokens_out = self._call_with_retries(system, user)
+            if is_cut_off(text):
+                spent_in, spent_out = tokens_in, tokens_out
+                raise TooLarge(f"the JSON answer was cut off after {tokens_out} output tokens")
         except TooLarge as exc:
             if len(page_text) < MIN_SPLIT_CHARS:
                 raise ProviderError(f"{self.name}: request too large: {exc}") from exc
             first, second = split_in_half(page_text)
             logger.info("%s: %s; splitting %d chars into %d + %d", self.name, exc,
                         len(page_text), len(first), len(second))  # fmt: skip
-            page_a, in_a, out_a = self.extract(first, source, feedback)
-            page_b, in_b, out_b = self.extract(second, source, feedback)
+            page_a, in_a, out_a = self.extract(first, source, feedback, today)
+            page_b, in_b, out_b = self.extract(second, source, feedback, today)
             both = PageExtraction(scholarships=page_a.scholarships + page_b.scholarships)
-            return both, in_a + in_b, out_a + out_b
+            return both, spent_in + in_a + in_b, spent_out + out_a + out_b
         self.last_model = self.name
         return parse_output(text, tokens_in, tokens_out), tokens_in, tokens_out
 
@@ -319,19 +350,23 @@ class FallbackProvider:
         self.last_model = primary.name
 
     def extract(
-        self, page_text: str, source: Source, feedback: str | None = None
+        self,
+        page_text: str,
+        source: Source,
+        feedback: str | None = None,
+        today: date | None = None,
     ) -> tuple[PageExtraction, int, int]:
         # A primary whose daily quota is used up is skipped quietly (it logged that once).
         if getattr(self.primary, "available", True):
             try:
-                result = self.primary.extract(page_text, source, feedback)
+                result = self.primary.extract(page_text, source, feedback, today)
                 self.last_model = self.primary.last_model
                 return result
             except ProviderError as exc:
                 if getattr(self.primary, "available", True):
                     logger.warning("%s failed (%s); falling back to %s", self.primary.name,
                                    exc, self.secondary.name)  # fmt: skip
-        result = self.secondary.extract(page_text, source, feedback)
+        result = self.secondary.extract(page_text, source, feedback, today)
         self.last_model = self.secondary.last_model
         return result
 

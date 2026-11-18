@@ -6,14 +6,19 @@
 For every pipeline/tests/golden/<key>.txt with a <key>.expected.json (written by hand),
 run the real extraction + validation and compare with the expected answer:
 
+- "today" is the page's fetch date (fetched_on in the expected file): the model gets it in
+  the prompt, and validation uses it, just as on the day the page was fetched.
 - deadline date: scored per page. Each required expected date is correct if some extracted
-  deadline (after validation) has that date. Extracted dates that are neither required nor
-  optional in the expected file are invented and count against the score:
+  deadline (after validation) has that date. A required date that had already passed on the
+  fetch date counts as optional (the model is told to leave out long-past deadlines).
+  Extracted dates that are neither required nor optional in the expected file are invented
+  and count against the score:
       accuracy = correct / (required + invented)
 - funding_type, open_to_pakistan, application fee: scored per expected item. Extracted
   items are paired with expected items by name similarity. A field set to null in the
   expected file is too ambiguous to score and is skipped (application_fee null means
-  "the page states no fee" and IS scored).
+  "the page states no fee" and IS scored). open_to_pakistan is not scored for sources in
+  Pakistan: the code sets it to "yes" from the source's location.
 
 Prints accuracy per field and every mismatch, and appends one row to results.csv
 (its `provider` column is the --provider option; `model` lists the models that answered).
@@ -77,6 +82,7 @@ class GoldenItem(_Strict):
 
 class Golden(_Strict):
     source: str
+    fetched_on: date  # when the page text was fetched: "today" for this page
     notes: str = ""
     items: list[GoldenItem]
 
@@ -157,13 +163,16 @@ def pair_items(
     return [(e, extracted[chosen[i]] if i in chosen else None) for i, e in enumerate(expected)]
 
 
-def score_page(page: GoldenPage, extracted: list[ValidatedScholarship]) -> PageResult:
+def score_page(
+    page: GoldenPage, extracted: list[ValidatedScholarship], location: str = "abroad"
+) -> PageResult:
     result = PageResult(page.key)
 
-    # Deadlines, per page.
-    required = {d.date: d for item in page.expected.items for d in item.deadlines
-                if not d.optional}  # fmt: skip
-    optional = {d.date for item in page.expected.items for d in item.deadlines if d.optional}
+    # Deadlines, per page. Already passed on the fetch date: optional.
+    fetched = page.expected.fetched_on
+    deadlines = [d for item in page.expected.items for d in item.deadlines]
+    required = {d.date: d for d in deadlines if not d.optional and d.date >= fetched}
+    optional = {d.date for d in deadlines if d.optional or d.date < fetched}
     got = {d.deadline_date: (v.item.name, d.label) for v in extracted for d in v.item.deadlines
            if d.deadline_date is not None}  # fmt: skip
     for day, expected in sorted(required.items()):
@@ -178,6 +187,8 @@ def score_page(page: GoldenPage, extracted: list[ValidatedScholarship]) -> PageR
     # Other fields, per expected item.
     for expected_item, match in pair_items(page.expected.items, extracted):
         for name in FIELDS:
+            if name == "open_to_pakistan" and location == "pakistan":
+                continue  # set from the source's location in code, not by the LLM
             want = getattr(expected_item, name)
             if name != "application_fee" and want is None:
                 continue  # too ambiguous to score
@@ -229,17 +240,19 @@ class EvalRun:
 def run_eval(
     pages: list[GoldenPage],
     sources: dict[str, Source],
-    extract: Callable[[str, Source], ExtractResult],
-    today: date,
+    extract: Callable[[str, Source, date], ExtractResult],
 ) -> EvalRun:
+    """Extract, validate and score every page, each as on its own fetch date."""
     results: list[PageResult] = []
     extractions: dict[str, ExtractResult] = {}
     notes: dict[str, list[str]] = {}
     for page in pages:
         print(f"extracting {page.key} ...", file=sys.stderr, flush=True)
-        extraction = extract(page.text, sources[page.key])
-        validated = validate_extraction(extraction.extraction, page.text, today)
-        page_result = score_page(page, validated)
+        source, today = sources[page.key], page.expected.fetched_on
+        extraction = extract(page.text, source, today)
+        location = source.location.value
+        validated = validate_extraction(extraction.extraction, page.text, today, location)
+        page_result = score_page(page, validated, location)
         page_result.mismatches.extend(f"extraction error: {e}" for e in extraction.errors)
         results.append(page_result)
         extractions[page.key] = extraction
@@ -312,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     provider = build_provider(settings, choice)
     today = date.today()
 
-    run = run_eval(pages, sources, lambda text, src: extract_page(text, src, provider), today)
+    run = run_eval(pages, sources, lambda text, src, day: extract_page(text, src, provider, day))
     print(format_report(run))
     append_results(csv_row(run, today, choice))
     print(f"\nAppended to {RESULTS_CSV}")

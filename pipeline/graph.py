@@ -128,14 +128,15 @@ def build_graph(deps: Deps) -> Any:
                 result = previous
             else:
                 result = await asyncio.to_thread(
-                    extract_first, text, state["source"], deps.provider
+                    extract_first, text, state["source"], deps.provider, deps.today
                 )
         return {"extracted": result, "attempts": state.get("attempts", 0) + 1}
 
     async def validate(state: SourceState) -> SourceState:
         extracted = state["extracted"]
         text = state["fetched"].text or ""
-        items = validate_extraction(extracted.extraction, text, deps.today)
+        location = state["source"].location.value
+        items = validate_extraction(extracted.extraction, text, deps.today, location)
         for item in items:  # the page was only partly read, so every item may miss facts
             for problem in extracted.errors:
                 item.flag(f"extraction incomplete: {problem}")

@@ -2,8 +2,11 @@
 
 - Only a focused copy of the page is sent (see pipeline/focus.py): the relevant lines and
   their context. If nothing looks relevant, the full text is sent instead.
-- Focused text over LLM_CHUNK_CHARS is split at headings, and the parts are extracted one by
-  one. Results that share a scholarship name are merged into one entry.
+- Long tables of dates are sent in pieces of about 15 rows, each with the table header
+  (see pipeline/tables.py). Other focused text over LLM_CHUNK_CHARS is split at headings.
+  The parts are extracted one by one; results that share a scholarship name are merged.
+- `today` goes into the prompt, so the model leaves out deadlines long past (the eval passes
+  the page's fetch date).
 - The quote check (validate.py) always uses the FULL page text, not the focused copy.
 - If the model's JSON does not match the schema, that part is asked once more with the
   validation error (extract_retry). If that fails too, the result is marked needs_review.
@@ -13,12 +16,14 @@
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from pipeline.focus import focus_text
 from pipeline.llm.provider import InvalidOutput, LLMProvider, ProviderError
 from pipeline.models import Source
 from pipeline.schemas import PageExtraction, ScholarshipExtraction
+from pipeline.tables import split_long_tables
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +48,24 @@ class ExtractResult:
     page_chars: int = 0  # length of the full page text
     sent_chars: int = 0  # length of the text sent to the LLM (focused copy)
     parts: int = 0  # how many pieces it was split into (one LLM call each, at least)
+    today: date | None = None  # the date given to the model (None: the real today)
 
 
-def extract_page(page_text: str, source: Source, provider: LLMProvider) -> ExtractResult:
+def extract_page(
+    page_text: str, source: Source, provider: LLMProvider, today: date | None = None
+) -> ExtractResult:
     """Extract every opportunity on the page, retrying invalid JSON once."""
-    result = extract_first(page_text, source, provider)
+    result = extract_first(page_text, source, provider, today)
     if result.invalid_parts:
         extract_retry(page_text, result, provider)
     return result
 
 
-def extract_first(page_text: str, source: Source, provider: LLMProvider) -> ExtractResult:
+def extract_first(
+    page_text: str, source: Source, provider: LLMProvider, today: date | None = None
+) -> ExtractResult:
     """First pass over every part of the page. Invalid answers go to `invalid_parts`."""
-    result = ExtractResult(source=source, extraction=PageExtraction())
+    result = ExtractResult(source=source, extraction=PageExtraction(), today=today)
     chunks = llm_chunks(page_text)
     result.page_chars = len(page_text)
     result.sent_chars = sum(len(c) for c in chunks)
@@ -87,7 +97,9 @@ def _extract_part(
 ) -> None:
     label = f"part {index + 1}/{total}: " if total > 1 else ""
     try:
-        page, tokens_in, tokens_out = provider.extract(chunk, result.source, feedback=feedback)
+        page, tokens_in, tokens_out = provider.extract(
+            chunk, result.source, feedback=feedback, today=result.today
+        )
     except InvalidOutput as exc:
         result.tokens_in += exc.tokens_in
         result.tokens_out += exc.tokens_out
@@ -122,12 +134,20 @@ def _first_line(exc: Exception) -> str:
 
 
 def llm_chunks(page_text: str) -> list[str]:
-    """The text to send to the LLM: the focused copy, split into parts of LLM_CHUNK_CHARS."""
+    """The text to send to the LLM: the focused copy in parts.
+
+    Long tables come last, in pieces of about 15 rows; the rest is split into parts of at most
+    LLM_CHUNK_CHARS.
+    """
     focused = focus_text(page_text)
     if not focused:
         logger.info("no relevant lines found; sending the full text")
         focused = page_text
-    return split_text(focused, LLM_CHUNK_CHARS)
+    rest, table_pieces = split_long_tables(focused)
+    if table_pieces:
+        logger.info("long table(s) split into %d piece(s)", len(table_pieces))
+    parts = split_text(rest, LLM_CHUNK_CHARS) if rest.strip() else []
+    return parts + table_pieces
 
 
 def split_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:

@@ -1,5 +1,6 @@
 """Tests for pipeline.nodes.extract, using a fake LLM provider (no API calls)."""
 
+from datetime import date
 from typing import Any
 
 from pipeline.llm.provider import InvalidOutput, ProviderError
@@ -184,3 +185,13 @@ def test_focused_text_over_12000_chars_is_split() -> None:
 
 def test_llm_chunks_falls_back_to_full_text_when_nothing_is_relevant() -> None:
     assert llm_chunks("Welcome to our website.") == ["Welcome to our website."]
+
+
+def test_today_is_passed_to_every_call_including_the_retry() -> None:
+    page = PageExtraction(scholarships=[scholarship("KAUST Fellowship")])
+    provider = FakeProvider(InvalidOutput("bad", 1, 1), page)
+
+    result = extract_page("page", make_source(), provider, today=date(2026, 11, 14))
+
+    assert result.today == date(2026, 11, 14)
+    assert provider.todays == [date(2026, 11, 14), date(2026, 11, 14)]

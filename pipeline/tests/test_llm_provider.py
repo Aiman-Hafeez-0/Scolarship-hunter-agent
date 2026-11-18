@@ -1,5 +1,6 @@
 """Tests for pipeline.llm. Real SDK clients are replaced by small fakes: no API calls."""
 
+from datetime import date
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from pipeline.llm.provider import (
     TooLarge,
     TransientError,
     build_provider,
+    is_cut_off,
     parse_output,
     parse_seconds,
     parse_try_again,
@@ -510,7 +512,10 @@ def test_groq_sets_answer_budget_and_low_reasoning(llm_settings: Settings) -> No
 
     call = completions.calls[0]
     assert call["reasoning_effort"] == "low"
-    assert call["max_completion_tokens"] == 4000  # short page: the full answer budget
+    system, user = (m["content"] for m in call["messages"])
+    # The answer gets what the prompt leaves of the per-minute budget, at most 4000.
+    assert call["max_completion_tokens"] == provider.output_budget(system, user)[1]
+    assert 3500 < call["max_completion_tokens"] <= 4000
     assert provider.budget == 7200  # 8000 tokens per minute minus a 10% margin
 
 
@@ -670,3 +675,54 @@ def test_gemini_per_minute_429_is_not_the_daily_quota() -> None:
             {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}})  # fmt: skip
     assert not is_daily_quota(per_minute)
     assert is_daily_quota(DAILY_QUOTA)
+
+
+# ---------- Cut-off answers and today's date ----------
+
+
+@pytest.mark.parametrize(
+    ("text", "cut"),
+    [(GOOD_JSON, False), (GOOD_JSON[:-10], True), ('{"scholarships": [', True), ("", False),
+     ('{"scholarships": [{"name": 5,, "x": 1}]}', False)],  # broken in the middle: not cut off
+)  # fmt: skip
+def test_is_cut_off(text: str, cut: bool) -> None:
+    assert is_cut_off(text) is cut
+
+
+def test_cut_off_json_is_split_in_half_not_failed(llm_settings: Settings) -> None:
+    provider = ScriptedProvider(llm_settings, Sleeps(), (GOOD_JSON[:-10], 500, 4000),
+                                (GOOD_JSON, 300, 50), (GOOD_JSON, 300, 50))  # fmt: skip
+
+    page, tokens_in, tokens_out = provider.extract(_long_text(4000), make_source())
+
+    assert len(page.scholarships) == 2  # one from each half
+    assert (tokens_in, tokens_out) == (1100, 4100)  # the cut-off answer's tokens still count
+
+
+def test_short_cut_off_text_is_a_provider_error(llm_settings: Settings) -> None:
+    provider = ScriptedProvider(llm_settings, Sleeps(), (GOOD_JSON[:-10], 500, 4000))
+    with pytest.raises(ProviderError, match="cut off"):
+        provider.extract("short page", make_source())
+
+
+def test_gemini_max_tokens_splits_the_text(llm_settings: Settings) -> None:
+    cut = _gemini_response(GOOD_JSON[:-10])
+    cut.candidates = [SimpleNamespace(finish_reason=genai.types.FinishReason.MAX_TOKENS)]
+    provider, models = _gemini(llm_settings, cut, _gemini_response(GOOD_JSON),
+                               _gemini_response(GOOD_JSON))  # fmt: skip
+
+    page, _, _ = provider.extract(_long_text(4000), make_source())
+
+    assert len(models.calls) == 3
+    assert len(page.scholarships) == 2
+
+
+def test_today_goes_into_the_prompt_and_through_the_fallback(llm_settings: Settings) -> None:
+    provider, models = _gemini(llm_settings, _gemini_response(GOOD_JSON))
+    fallback = FallbackProvider(provider, FakeProvider())
+
+    fallback.extract("page", make_source(), today=date(2026, 11, 14))
+
+    system = models.calls[0]["config"].system_instruction
+    assert "Today's date: 2026-11-14" in system
+    assert "more than 30 days before today's date" in system

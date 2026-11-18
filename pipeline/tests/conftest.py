@@ -3,6 +3,7 @@
 import os
 import uuid
 from collections.abc import Iterator
+from datetime import date
 from typing import Any
 
 import psycopg
@@ -92,19 +93,25 @@ class FakeProvider:
     """An LLM provider for tests: returns (or raises) the scripted outcomes in order.
 
     Each outcome is a PageExtraction (returned with 100 tokens in, 20 out) or an exception.
-    Every call is recorded as (page_text, feedback).
+    Every call is recorded as (page_text, feedback); the `today` of each call goes to `todays`.
     """
 
     def __init__(self, *outcomes: PageExtraction | Exception, name: str = "fake-model") -> None:
         self.outcomes = list(outcomes)
         self.calls: list[tuple[str, str | None]] = []
+        self.todays: list[date | None] = []
         self.name = name
         self.last_model = name
 
     def extract(
-        self, page_text: str, source: Source, feedback: str | None = None
+        self,
+        page_text: str,
+        source: Source,
+        feedback: str | None = None,
+        today: date | None = None,
     ) -> tuple[PageExtraction, int, int]:
         self.calls.append((page_text, feedback))
+        self.todays.append(today)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome

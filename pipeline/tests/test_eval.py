@@ -27,8 +27,10 @@ TEXT = (
     "Round 1 application deadline 27 September 2026. Round 2 application deadline "
     "3 January 2027. Decisions released 19 November 2026. Applications are free of charge."
 )
+FETCHED = date(2026, 9, 1)  # before every date on the page: all of them still ahead
 GOLDEN = Golden.model_validate({
     "source": "kaust",
+    "fetched_on": FETCHED.isoformat(),
     "items": [{
         "name": "KAUST Graduate Admission",
         "funding_type": "unknown",
@@ -91,7 +93,7 @@ def test_missing_item_counts_scored_fields_wrong() -> None:
 
 
 def test_items_are_paired_by_name() -> None:
-    golden = Golden.model_validate({"source": "x", "items": [
+    golden = Golden.model_validate({"source": "x", "fetched_on": "2026-11-14", "items": [
         {"name": "USAID Merit and Needs based Scholarship", "funding_type": "full",
          "open_to_pakistan": "yes", "application_fee": None},
         {"name": "Rizvee-Kidwai Scholarship", "funding_type": "tuition_only",
@@ -123,8 +125,8 @@ def test_run_eval_report_and_csv(tmp_path: Path) -> None:
     )])  # fmt: skip
     provider = FakeProvider(answer)
 
-    run = run_eval([PAGE], {"kaust": make_source(key="kaust")},
-                   lambda text, src: extract_page(text, src, provider), TODAY)  # fmt: skip
+    run = run_eval([PAGE], {"kaust": make_source(key="kaust", location="abroad")},
+                   lambda text, src, day: extract_page(text, src, provider, day))  # fmt: skip
     report = format_report(run)
 
     assert "deadline date       1/2    50.0%" in report
@@ -137,10 +139,32 @@ def test_run_eval_report_and_csv(tmp_path: Path) -> None:
     append_results(csv_row(run, TODAY, "groq"), path)
     rows = list(csv.reader(path.open(encoding="utf-8")))
     assert rows[0] == CSV_HEADER
-    assert rows[1][:8] == ["2026-11-15", "auto", "fake-model", "extract_v2", "1", "1", "2",
+    assert rows[1][:8] == ["2026-11-15", "auto", "fake-model", "extract_v3", "1", "1", "2",
                            "0.5000"]  # fmt: skip
     assert rows[2][1] == "groq"
     assert len(rows) == 3  # header written once
+    assert provider.todays == [FETCHED]  # the model was given the page's fetch date
+
+
+def test_deadline_passed_on_fetch_date_is_optional() -> None:
+    late = GoldenPage("kaust", TEXT, GOLDEN.model_copy(update={"fetched_on": date(2026, 10, 1)}))
+
+    without = score_page(late, [ValidatedScholarship(item(deadlines=[deadline(date(2027, 1, 3))]))])
+    assert (without.deadlines.correct, without.deadlines.total) == (1, 1)  # Round 1 not needed
+
+    with_it = score_page(late, [ValidatedScholarship(item(
+        deadlines=[deadline(date(2026, 9, 27)), deadline(date(2027, 1, 3))]))])  # fmt: skip
+    assert (with_it.deadlines.correct, with_it.deadlines.total) == (1, 1)  # and not invented
+
+
+def test_open_to_pakistan_is_not_scored_for_pakistan_sources() -> None:
+    golden = GOLDEN.model_copy(deep=True)
+    golden.items[0].open_to_pakistan = "yes"
+    page = GoldenPage("kaust", TEXT, golden)
+    extracted = [ValidatedScholarship(item(open_to_pakistan="unclear"))]
+
+    assert score_page(page, extracted, "abroad").fields["open_to_pakistan"].total == 1
+    assert score_page(page, extracted, "pakistan").fields["open_to_pakistan"].total == 0
 
 
 def test_csv_has_provider_column() -> None:

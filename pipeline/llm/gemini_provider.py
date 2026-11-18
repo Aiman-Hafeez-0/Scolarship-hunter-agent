@@ -14,7 +14,13 @@ from google import genai
 from google.genai import errors, types
 
 from pipeline.config import Settings
-from pipeline.llm.provider import BaseProvider, ProviderError, TransientError, parse_seconds
+from pipeline.llm.provider import (
+    BaseProvider,
+    ProviderError,
+    TooLarge,
+    TransientError,
+    parse_seconds,
+)
 from pipeline.schemas import llm_json_schema
 
 logger = logging.getLogger(__name__)
@@ -107,4 +113,7 @@ class GeminiProvider(BaseProvider):
         tokens_out = (
             (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0) if usage else 0
         )
+        candidates = getattr(response, "candidates", None) or []
+        if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+            raise TooLarge(f"the answer was cut off at the output limit ({tokens_out} tokens)")
         return response.text or "", tokens_in, tokens_out

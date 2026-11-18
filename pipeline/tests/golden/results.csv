@@ -1,0 +1,2 @@
+date,provider,model,prompt_version,pages,deadline_correct,deadline_total,deadline_accuracy,funding_type_accuracy,open_to_pakistan_accuracy,fee_accuracy,tokens_in,tokens_out
+2026-11-18,groq,openai/gpt-oss-120b,extract_v2,15,8,36,0.2222,0.6429,0.5500,0.7500,67645,13687

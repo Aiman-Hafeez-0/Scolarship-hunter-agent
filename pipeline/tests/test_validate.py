@@ -11,9 +11,16 @@ from pipeline.nodes.validate import (
     is_closed,
     quote_score,
     status_after_dates,
+    validate_extraction,
     validate_scholarship,
 )
-from pipeline.schemas import Coverage, DeadlineItem, Requirement, ScholarshipExtraction
+from pipeline.schemas import (
+    Coverage,
+    DeadlineItem,
+    PageExtraction,
+    Requirement,
+    ScholarshipExtraction,
+)
 
 TODAY = date(2026, 11, 15)
 PAGE = """
@@ -261,3 +268,20 @@ def test_started_intake_with_deadline_ahead_needs_review() -> None:
     assert result.item.status == "open"
     assert result.needs_review
     assert any("has started, but deadline 2027-01-15 is still ahead" in n for n in result.notes)
+
+
+# ---------- open_to_pakistan from the source's location ----------
+
+
+def test_sources_in_pakistan_are_open_to_pakistan_without_a_quote() -> None:
+    extraction = PageExtraction(scholarships=[item(open_to_pakistan="unclear")])
+    [result] = validate_extraction(extraction, PAGE, TODAY, location="pakistan")
+    assert result.item.open_to_pakistan == "yes"
+    assert result.notes == []
+
+
+def test_abroad_sources_still_need_a_quote_for_yes() -> None:
+    claimed = item(open_to_pakistan="yes", open_to_pakistan_evidence="Open to Pakistan.")
+    extraction = PageExtraction(scholarships=[claimed])
+    [result] = validate_extraction(extraction, PAGE, TODAY, location="abroad")
+    assert result.item.open_to_pakistan == "unclear"  # the quote is not on the page

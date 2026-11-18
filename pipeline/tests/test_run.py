@@ -165,7 +165,7 @@ def test_extraction_report() -> None:
     assert report["source"] == "example"
     assert report["snapshot_fetched_at"] == "2026-11-14T09:00:00+00:00"
     assert report["page_chars"] == 9
-    assert report["extract_version"] == "extract_v2"
+    assert report["extract_version"] == "extract_v3"
     assert report["model"] == "fake-model"
     assert (report["tokens_in"], report["tokens_out"]) == (100, 20)
     assert report["needs_review"] is False

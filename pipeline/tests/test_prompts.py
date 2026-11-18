@@ -30,10 +30,13 @@ def test_user_message_includes_feedback() -> None:
     assert "deadlines.0.evidence missing" in message
 
 
-def test_extract_v2_rules() -> None:
+def test_extract_v3_rules() -> None:
     prompt = extract_system_prompt(make_source(), today=date(2026, 11, 16))
 
-    assert EXTRACT_VERSION == "extract_v2"
+    assert EXTRACT_VERSION == "extract_v3"
+    assert "more than 30 days before today's date" in prompt
+    assert "Tables:" in prompt and "the whole row" in prompt
+    assert "named in a single sentence" in prompt
     assert "degree_levels_evidence" in prompt
     assert "intake_evidence" in prompt and "Spring 2027" in prompt
     assert "MS and PhD" in prompt

@@ -174,8 +174,10 @@ def run_extract(
         )
 
     provider = provider or build_provider(settings, provider_choice)
-    result = extract_page(snapshot.text, source, provider)
-    validated = validate_extraction(result.extraction, snapshot.text, today or date.today())
+    today = today or date.today()
+    result = extract_page(snapshot.text, source, provider, today)
+    validated = validate_extraction(result.extraction, snapshot.text, today,
+                                    source.location.value)  # fmt: skip
     return extraction_report(result, snapshot, validated)
 
 
