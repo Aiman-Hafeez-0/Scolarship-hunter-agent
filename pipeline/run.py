@@ -17,6 +17,16 @@
     uv run python -m pipeline.run profile               save profile.yaml to the profiles table
     uv run python -m pipeline.run match                 match every profile against every
                                                         scholarship that is not closed
+    uv run python -m pipeline.run digest [--dry-run]    email the weekly digest to every profile
+                                                        (--dry-run: write data/digest-preview.html,
+                                                        print the text version, send nothing)
+    uv run python -m pipeline.run reminders             email deadline reminders (30/14/7/2 days
+                                                        before, by Pakistan date) and admin
+                                                        alerts to ADMIN_EMAIL (run once a day)
+    uv run python -m pipeline.run test-email            send a one-line test email to ADMIN_EMAIL
+                                                        with MAIL_PROVIDER (resend or gmail),
+                                                        printing each step (to find where
+                                                        sending fails)
 
 Exit code: 0 normally; 1 if every source failed (fetch, weekly) or the result needs review
 (extract); 2 for setup problems (bad config, unknown key, missing snapshot or profile,
@@ -29,7 +39,7 @@ import io
 import json
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import psycopg
@@ -45,6 +55,12 @@ from pipeline.nodes.fetch import fetch_all
 from pipeline.nodes.load_sources import SourcesError, load_sources
 from pipeline.nodes.match import Match, run_matching
 from pipeline.nodes.validate import ValidatedScholarship, is_closed, validate_extraction
+from pipeline.notify.alerts import AlertReport, check_and_alert
+from pipeline.notify.deadlines import PKT
+from pipeline.notify.digest import SendResult, build_all, render, send_digests
+from pipeline.notify.mailer import Log, Mailer, MailError, build_mailer
+from pipeline.notify.reminders import send_reminders
+from pipeline.notify.store import PostgresDigestStore, PostgresNotifyStore
 from pipeline.profile import ProfileError, load_profile
 from pipeline.prompts import EXTRACT_VERSION
 from pipeline.store_local import LocalStore
@@ -275,6 +291,89 @@ def format_matches(matches: list[Match], top: int = 5) -> str:
     return "\n".join(lines).rstrip()
 
 
+PREVIEW_FILE = "digest-preview.html"
+
+
+def run_digest(settings: Settings, dry_run: bool) -> tuple[str, int]:
+    """Send (or preview) the weekly digests. Returns (what to print, exit code)."""
+    if not settings.database_url:
+        raise SetupError("DATABASE_URL is not set: the digest reads from the database")
+    mailer: Mailer | None = None
+    if not dry_run:
+        mailer = build_mailer(settings)
+
+    with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        store = PostgresDigestStore(conn)
+        if mailer is not None:
+            results = send_digests(store, mailer)
+            lines = [f"{'FAILED' if r.error else 'Sent'}: {r.subject} -> {r.email}"
+                     + (f"\n  {r.error}" if r.error else "") for r in results]  # fmt: skip
+            failed = any(r.error for r in results)
+            output = "\n".join(lines) or "No digests to send (no profiles, or all paused)."
+            return output, int(failed)
+        digests = build_all(store, datetime.now(PKT).date())
+
+    if not digests:
+        return "No digests to build (no profiles, or all paused).", 0
+    rendered = [render(d) for d in digests]
+    preview = settings.data_dir / PREVIEW_FILE
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_text("\n<hr>\n".join(html for _, html in rendered), encoding="utf-8")
+    texts = [f"To: {d.profile.email}\nSubject: {d.subject}\n\n{text}"
+             for d, (text, _) in zip(digests, rendered, strict=True)]  # fmt: skip
+    return "\n\n".join(texts) + f"\n(dry run: nothing sent; HTML preview in {preview})", 0
+
+
+def run_reminders(settings: Settings, mailer: Mailer | None = None) -> tuple[str, int]:
+    """Send due reminders, then run the admin checks. Returns (what to print, exit code)."""
+    if not settings.database_url:
+        raise SetupError("DATABASE_URL is not set: reminders read from the database")
+    mailer = mailer or build_mailer(settings)
+    with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        store = PostgresNotifyStore(conn)
+        reminders = send_reminders(store, mailer)
+        report: AlertReport | None = None
+        if settings.admin_email:
+            report = check_and_alert(store, mailer, settings.admin_email,
+                                     settings.monthly_token_budget)  # fmt: skip
+    return format_reminders(reminders, report)
+
+
+def format_reminders(reminders: list[SendResult], report: AlertReport | None) -> tuple[str, int]:
+    def line(kind: str, r: SendResult) -> str:
+        if r.error:
+            return f"FAILED {kind}: {r.subject} -> {r.email}\n  {r.error}"
+        return f"Sent {kind}: {r.subject} -> {r.email}"
+
+    lines = [line("reminder", r) for r in reminders] or ["No reminders due."]
+    if report is None:
+        lines.append("Admin alerts skipped: ADMIN_EMAIL is not set.")
+    else:
+        lines += [line("admin alert", r) for r in report.sent]
+        lines += [f"Resolved admin alert: {key}" for key in report.resolved]
+        if not report.sent and not report.resolved:
+            lines.append("No new admin alerts.")
+    failed = any(r.error for r in reminders) or bool(report and any(r.error for r in report.sent))
+    return "\n".join(lines), int(failed)
+
+
+def run_test_email(settings: Settings, log: Log, mailer: Mailer | None = None) -> int:
+    """Send one test email to ADMIN_EMAIL, logging every step. Returns the exit code."""
+    if not settings.admin_email:
+        raise SetupError("ADMIN_EMAIL is not set in .env: the test email is sent there")
+    mailer = mailer or build_mailer(settings)
+    log(f"Mail provider: {settings.mail_provider}")
+    text = "Test email from Scholarship Hunter: sending works."
+    try:
+        mailer.send(settings.admin_email, "Scholarship Hunter test email", text,
+                    f"<p>{text}</p>", log=lambda line: log(f"-> {line}"))  # fmt: skip
+    except MailError as exc:
+        log(f"FAILED: {exc}")
+        return 1
+    log(f"OK: test email sent to {settings.admin_email}")
+    return 0
+
+
 def weekly_totals(outcomes: list[SourceOutcome]) -> db.RunTotals:
     saved = [o for o in outcomes if o.saved]
     return db.RunTotals(
@@ -361,6 +460,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="LLM to use (auto = Gemini, then Groq if Gemini fails)")
     commands.add_parser("profile", help="save profile.yaml to the profiles table")
     commands.add_parser("match", help="match every profile against open scholarships")
+    digest = commands.add_parser("digest", help="email the weekly digest to every profile")
+    digest.add_argument("--dry-run", action="store_true",
+                        help=f"write data/{PREVIEW_FILE} and print the text; send nothing")
+    commands.add_parser("reminders", help="email deadline reminders and admin alerts")
+    commands.add_parser("test-email", help="send a test email to ADMIN_EMAIL, showing each step")
     args = parser.parse_args(argv)
 
     if args.command == "extract" and not args.dry_run:
@@ -383,6 +487,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         elif args.command == "match":
             matches = run_match(Settings())
+        elif args.command == "digest":
+            output, code = run_digest(Settings(), dry_run=args.dry_run)
+            print(output)
+            return code
+        elif args.command == "reminders":
+            output, code = run_reminders(Settings())
+            print(output)
+            return code
+        elif args.command == "test-email":
+            return run_test_email(Settings(), log=lambda line: print(line, flush=True))
         else:
             results = run_fetch(Settings(), local=args.local, only=args.only)
     except (SetupError, SourcesError, ProfileError, ValueError) as exc:

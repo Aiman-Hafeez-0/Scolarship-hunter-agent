@@ -83,3 +83,10 @@ def test_secrets_are_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
                         groq_api_key="key-2")  # fmt: skip
     text = repr(settings)
     assert "s3cret" not in text and "key-1" not in text and "key-2" not in text
+
+
+def test_monthly_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MONTHLY_TOKEN_BUDGET", "")  # e.g. an unset GitHub secret
+    assert Settings(_env_file=None).monthly_token_budget == 1_000_000
+    monkeypatch.setenv("MONTHLY_TOKEN_BUDGET", "250000")
+    assert Settings(_env_file=None).monthly_token_budget == 250_000

@@ -70,6 +70,19 @@ class Settings(BaseSettings):
     groq_reasoning_effort: Literal["none", "default", "low", "medium", "high"] = "low"
     groq_rate_limit_tries: int = 5  # calls per request when Groq answers 429
 
+    # How emails are sent: "resend" (HTTPS API) or "gmail" (SMTP). Keys are never printed.
+    mail_provider: Literal["resend", "gmail"] = "resend"
+    resend_api_key: str | None = Field(default=None, repr=False)
+
+    # Gmail SMTP (only used when MAIL_PROVIDER=gmail).
+    gmail_address: str = ""
+    gmail_app_password: str | None = Field(default=None, repr=False)
+    admin_email: str = ""  # where test emails and admin alerts are sent
+
+    # LLM tokens (in + out) we expect to use per calendar month. An admin alert is sent when
+    # a month's runs pass 80% of it. 0 turns that alert off.
+    monthly_token_budget: int = Field(default=1_000_000, ge=0)
+
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")
     data_dir: Path = Path("data")
@@ -78,6 +91,22 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_quotes(cls, value: Any) -> Any:
         return strip_quotes(value) if isinstance(value, str) else value
+
+    @field_validator("mail_provider", mode="before")
+    @classmethod
+    def _default_provider(cls, value: Any) -> Any:
+        """A blank MAIL_PROVIDER (e.g. an unset GitHub secret) means the default: resend."""
+        if isinstance(value, str):
+            return value.strip().lower() or "resend"
+        return value
+
+    @field_validator("monthly_token_budget", mode="before")
+    @classmethod
+    def _default_budget(cls, value: Any) -> Any:
+        """A blank MONTHLY_TOKEN_BUDGET (e.g. an unset GitHub secret) means the default."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields["monthly_token_budget"].default
+        return value
 
     @property
     def user_agent(self) -> str:

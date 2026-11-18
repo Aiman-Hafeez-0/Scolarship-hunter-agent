@@ -1,0 +1,37 @@
+name: Test email
+
+# Manual only: Actions tab > "Test email" > "Run workflow".
+# Sends one short email to ADMIN_EMAIL and prints each step, to check the mail secrets work.
+# It does not use the database, so it has no migration step.
+on:
+  workflow_dispatch:
+
+# The job only needs to read the code.
+permissions:
+  contents: read
+
+jobs:
+  test-email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # Email: MAIL_PROVIDER picks resend (also when it is empty) or gmail.
+      MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      # Optional: only used when MAIL_PROVIDER is gmail.
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked --no-dev
+
+      - name: Send a test email
+        run: uv run --no-dev python -m pipeline.run test-email

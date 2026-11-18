@@ -154,6 +154,8 @@ def nationality_rule(p: Profile, s: ScholarshipFacts, today: date) -> RuleResult
         return RuleResult(name, "pass", "open to applicants from Pakistan")
     if s.open_to_pakistan == "no":
         return RuleResult(name, "fail", "not open to applicants from Pakistan")
+    if s.location.strip().lower() == "pakistan":
+        return RuleResult(name, "pass", "Pakistani university or scholarship")
     return RuleResult(name, "unknown", "the page does not say whether Pakistan is eligible")
 
 

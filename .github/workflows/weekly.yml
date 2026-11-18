@@ -1,8 +1,12 @@
 name: Weekly run
 
-# Manual only for now: Actions tab > "Weekly run" > "Run workflow".
-# (A schedule will be added later.)
+# Runs on a schedule, and by hand: Actions tab > "Weekly run" > "Run workflow".
 on:
+  schedule:
+    # TRIAL WEEK: every day at 03:17 UTC (08:17 PKT), to catch problems quickly.
+    # After 27 Nov 2026, change this to "17 3 * * 1" (Mondays only, 08:17 PKT).
+    # (Minute 17, not 0: GitHub's scheduler is busiest on the hour and may delay or skip runs.)
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -14,6 +18,10 @@ on:
         type: choice
         options: [auto, gemini, groq]
         default: auto
+      send_digest:
+        description: "Send the digest email after the run (it is always sent on Mondays)"
+        type: boolean
+        default: false
 
 # The job only needs to read the code.
 permissions:
@@ -40,6 +48,13 @@ jobs:
       CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # Email: MAIL_PROVIDER picks resend (also when it is empty) or gmail.
+      MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      # Optional: only used when MAIL_PROVIDER is gmail.
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -50,11 +65,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --no-dev
 
+      # Brings the database schema up to date. Safe every time: only new SQL files are applied.
+      - name: Apply database migrations
+        run: uv run --no-dev python -m pipeline.migrate
+
       # Inputs go through env variables, never pasted straight into the shell command.
+      # A scheduled run has no inputs, so they fall back to the defaults.
       - name: Fetch, extract and save
         env:
-          FORCE: ${{ inputs.force }}
-          PROVIDER: ${{ inputs.provider }}
+          FORCE: ${{ inputs.force || 'false' }}
+          PROVIDER: ${{ inputs.provider || 'auto' }}
         run: |
           args=(--provider "$PROVIDER")
           if [ "$FORCE" = "true" ]; then args+=(--force); fi
@@ -65,6 +85,25 @@ jobs:
         if: ${{ !cancelled() }}
         run: uv run --no-dev python -m pipeline.run match 2>&1 | tee match-summary.txt
 
+      # Monday is checked in UTC; at 03:17 UTC it is the same day in Pakistan (08:17 PKT).
+      - name: Decide whether to send the digest
+        id: digest
+        if: ${{ !cancelled() }}
+        env:
+          SEND_DIGEST: ${{ inputs.send_digest || 'false' }}
+        run: |
+          if [ "$(date -u +%u)" = "1" ] || [ "$SEND_DIGEST" = "true" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            echo "Not Monday and send_digest is off: no digest today."
+          fi
+
+      # Runs even if the weekly step failed: the digest then shows what was saved before.
+      - name: Send digest
+        if: ${{ !cancelled() && steps.digest.outputs.send == 'true' }}
+        run: uv run --no-dev python -m pipeline.run digest 2>&1 | tee digest-summary.txt
+
       - name: Upload summary
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -73,5 +112,6 @@ jobs:
           path: |
             weekly-summary.txt
             match-summary.txt
+            digest-summary.txt
           if-no-files-found: warn
           retention-days: 30

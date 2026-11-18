@@ -68,6 +68,16 @@ def test_nationality() -> None:
     assert outcome(nationality_rule(other, facts(open_to_pakistan="yes"), TODAY)) == "unknown"
 
 
+def test_nationality_passes_for_items_in_pakistan() -> None:
+    p = profile(nationality="PK")
+    result = nationality_rule(p, facts(location="pakistan"), TODAY)
+    assert (result.outcome, result.reason) == ("pass", "Pakistani university or scholarship")
+    # An explicit "not open to Pakistan" still wins.
+    closed_to_pk = facts(location="pakistan", open_to_pakistan="no")
+    assert outcome(nationality_rule(p, closed_to_pk, TODAY)) == "fail"
+    assert outcome(nationality_rule(p, facts(location="abroad"), TODAY)) == "unknown"
+
+
 # ---------- degree level ----------
 
 

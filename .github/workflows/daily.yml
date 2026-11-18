@@ -1,0 +1,52 @@
+name: Daily reminders
+
+# Every day at 02:47 UTC (07:47 PKT), and by hand: Actions tab > "Daily reminders".
+# Sends deadline reminders and admin alerts. If a day is missed, the next run sends only the
+# closest reminder that was reached, never a pile of old ones.
+on:
+  schedule:
+    - cron: "47 2 * * *"
+  workflow_dispatch:
+
+# The job only needs to read the code.
+permissions:
+  contents: read
+
+# Never let two reminder runs overlap.
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+      # Email: MAIL_PROVIDER picks resend (also when it is empty) or gmail.
+      MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      # Optional: only used when MAIL_PROVIDER is gmail.
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      # Optional: blank means the default (1,000,000 tokens a month).
+      MONTHLY_TOKEN_BUDGET: ${{ secrets.MONTHLY_TOKEN_BUDGET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked --no-dev
+
+      # Brings the database schema up to date. Safe every time: only new SQL files are applied.
+      - name: Apply database migrations
+        run: uv run --no-dev python -m pipeline.migrate
+
+      - name: Send reminders and admin alerts
+        run: uv run --no-dev python -m pipeline.run reminders

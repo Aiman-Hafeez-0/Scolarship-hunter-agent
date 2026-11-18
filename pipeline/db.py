@@ -364,7 +364,7 @@ def _save_scholarship(
     assert row is not None
     scholarship_id = row[0]
 
-    for table in ("deadlines", "requirements", "required_documents", "evidence"):
+    for table in ("requirements", "required_documents", "evidence"):
         conn.execute(f"delete from {table} where scholarship_id = %s", (scholarship_id,))
 
     evidence_ids: dict[str, object] = {}
@@ -379,16 +379,7 @@ def _save_scholarship(
         assert evidence_row is not None
         evidence_ids[evidence.field_path] = evidence_row[0]
 
-    for index, deadline in enumerate(item.deadlines):
-        conn.execute(
-            """
-            insert into deadlines (scholarship_id, label, deadline_date, timezone_note,
-                                   is_estimated, evidence_id)
-            values (%s, %s, %s, %s, %s, %s)
-            """,
-            (scholarship_id, deadline.label, deadline.deadline_date, deadline.time_and_timezone,
-             deadline.is_estimated, evidence_ids.get(f"deadlines[{index}]")),
-        )  # fmt: skip
+    _save_deadlines(conn, scholarship_id, item, evidence_ids)
     for index, requirement in enumerate(item.requirements):
         conn.execute(
             """
@@ -413,6 +404,46 @@ def _save_scholarship(
                 """,
                 (scholarship_id, field_path, _json_or_null(old), _json_or_null(new)),
             )
+
+
+def _save_deadlines(
+    conn: Conn, scholarship_id: object, item: ScholarshipExtraction, evidence_ids: dict[str, object]
+) -> None:
+    """Update deadlines in place, so a deadline keeps its id while its label and date stay.
+
+    Reminders are recorded per deadline id; a new id would mean the same reminder again.
+    A deadline whose date changed gets a new row (and so its own reminders).
+    """
+    existing: dict[tuple[str, date | None], list[object]] = {}
+    for deadline_id, label, day in conn.execute(
+        "select id, label, deadline_date from deadlines where scholarship_id = %s order by id",
+        (scholarship_id,),
+    ):
+        existing.setdefault((label, day), []).append(deadline_id)
+
+    for index, deadline in enumerate(item.deadlines):
+        details = (deadline.time_and_timezone, deadline.is_estimated,
+                   evidence_ids.get(f"deadlines[{index}]"))  # fmt: skip
+        same = existing.get((deadline.label, deadline.deadline_date))
+        if same:
+            conn.execute(
+                "update deadlines set timezone_note = %s, is_estimated = %s, evidence_id = %s"
+                " where id = %s",
+                (*details, same.pop(0)),
+            )
+            continue
+        conn.execute(
+            """
+            insert into deadlines (scholarship_id, label, deadline_date, timezone_note,
+                                   is_estimated, evidence_id)
+            values (%s, %s, %s, %s, %s, %s)
+            """,
+            (scholarship_id, deadline.label, deadline.deadline_date, *details),
+        )
+
+    gone = [deadline_id for ids in existing.values() for deadline_id in ids]
+    if gone:
+        conn.execute("delete from deadlines where id = any(%s)", (gone,))
 
 
 def _json_or_null(value: Any) -> Jsonb | None:

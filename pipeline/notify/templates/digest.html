@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ d.subject }}</title>
+</head>
+<body style="margin:0; padding:0; background:#f4f4f4;">
+<div style="max-width:600px; margin:0 auto; padding:16px; background:#ffffff; font-family:Arial, Helvetica, sans-serif; font-size:15px; line-height:1.5; color:#222222;">
+{% macro item(v) %}
+  <div style="border:1px solid #dddddd; border-radius:6px; padding:12px; margin:0 0 12px 0;">
+    <div style="font-size:16px; font-weight:bold;">
+      {{ v.name }}{% if v.is_new %} <span style="background:#1a7f37; color:#ffffff; font-size:11px; padding:1px 6px; border-radius:3px;">NEW</span>{% endif %}
+    </div>
+    <div style="color:#666666; font-size:13px;">{{ v.type_label }}</div>
+    <ul style="margin:6px 0; padding-left:18px;">
+    {% for line in v.deadlines %}
+      <li>{{ line }}</li>
+    {% endfor %}
+    </ul>
+    <div>{{ v.status_line }}</div>
+    {% for note in v.notes %}
+    <div style="color:#9a6700;">Needs review: {{ note }}</div>
+    {% endfor %}
+    <div style="margin-top:6px;"><a href="{{ v.link }}" style="color:#0b57d0; word-break:break-all;">Official page</a></div>
+  </div>
+{% endmacro %}
+{% macro section(title, items) %}
+{% if items %}
+  <h2 style="font-size:18px; margin:24px 0 8px 0; border-bottom:2px solid #222222; padding-bottom:4px;">{{ title }} ({{ items | length }})</h2>
+  {% for v in items %}{{ item(v) }}{% endfor %}
+{% endif %}
+{% endmacro %}
+  <p>Hi {{ d.profile.full_name }},</p>
+{% if d.is_empty %}
+  <p>No changes this week. {{ d.run_line }}</p>
+{% else %}
+  <p>Your scholarship digest for the week of {{ d.week_of }}.</p>
+  {{ section("Action needed (deadline in 14 days or less)", d.action) }}
+  {{ section("New matches since the last digest", d.new) }}
+{% if d.changed %}
+  <h2 style="font-size:18px; margin:24px 0 8px 0; border-bottom:2px solid #222222; padding-bottom:4px;">Changed ({{ d.changed | length }})</h2>
+  {% for g in d.changed %}
+  <div style="border:1px solid #dddddd; border-radius:6px; padding:12px; margin:0 0 12px 0;">
+    <div style="font-size:16px; font-weight:bold;">{{ g.name }}</div>
+    <ul style="margin:6px 0; padding-left:18px;">
+    {% for line in g.lines %}
+      <li>{{ line }}</li>
+    {% endfor %}
+    </ul>
+    <div><a href="{{ g.link }}" style="color:#0b57d0;">Official page</a></div>
+  </div>
+  {% endfor %}
+{% endif %}
+  {{ section("Pakistan admissions and tests", d.pakistan) }}
+  {{ section("Needs review (check the official page)", d.review) }}
+  <p style="color:#666666; font-size:13px; margin-top:24px;">{{ d.run_line }}</p>
+{% endif %}
+  <p style="color:#666666; font-size:13px;">Every fact comes from the official page linked above. Always confirm there before applying.</p>
+</div>
+</body>
+</html>

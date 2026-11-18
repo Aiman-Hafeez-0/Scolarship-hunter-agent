@@ -1,0 +1,53 @@
+{% macro item(v, n) %}
+{{ n }}. {{ v.name }}{% if v.is_new %} [NEW]{% endif %}
+
+   {{ v.type_label }}
+{% for line in v.deadlines %}
+   - {{ line }}
+{% endfor %}
+   {{ v.status_line }}
+{% for note in v.notes %}
+   Needs review: {{ note }}
+{% endfor %}
+   {{ v.link }}
+{% endmacro %}
+{% macro section(title, items) %}
+{% if items %}
+{{ title | upper }} ({{ items | length }})
+{{ "-" * 40 }}
+
+{% for v in items %}
+{{ item(v, loop.index) }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+Hi {{ d.profile.full_name }},
+
+{% if d.is_empty %}
+No changes this week. {{ d.run_line }}
+
+{% else %}
+Your scholarship digest for the week of {{ d.week_of }}.
+
+{{ section("Action needed (deadline in 14 days or less)", d.action) }}
+{{ section("New matches since the last digest", d.new) }}
+{% if d.changed %}
+CHANGED ({{ d.changed | length }})
+{{ "-" * 40 }}
+
+{% for g in d.changed %}
+{{ loop.index }}. {{ g.name }}
+{% for line in g.lines %}
+   - {{ line }}
+{% endfor %}
+   {{ g.link }}
+
+{% endfor %}
+{% endif %}
+{{ section("Pakistan admissions and tests", d.pakistan) }}
+{{ section("Needs review (check the official page)", d.review) }}
+{{ d.run_line }}
+
+{% endif %}
+Every fact comes from the official page linked above. Always confirm there before applying.
+-- Scholarship Hunter

@@ -16,12 +16,15 @@ from pipeline.graph import SourceOutcome
 from pipeline.models import Change, FetchStatus
 from pipeline.nodes.extract import extract_page
 from pipeline.nodes.validate import ValidatedScholarship, validate_extraction
+from pipeline.notify.alerts import AlertReport
+from pipeline.notify.digest import SendResult
 from pipeline.profile import ProfileError
 from pipeline.run import (
     SetupError,
     choose_sources,
     exit_code,
     extraction_report,
+    format_reminders,
     format_saved_items,
     format_summary,
     format_weekly_summary,
@@ -30,6 +33,7 @@ from pipeline.run import (
     run_fetch,
     run_match,
     run_profile,
+    run_reminders,
     run_weekly,
 )
 from pipeline.schemas import DeadlineItem, PageExtraction, ScholarshipExtraction
@@ -321,3 +325,28 @@ def test_summary_shows_150_characters_of_an_error() -> None:
     assert "HTTP 400 json_validate_failed" in note
     shown = note[note.index("LLM call failed"):]
     assert len(shown) == 150 and shown.endswith("...")
+
+
+def test_reminders_command_needs_database_url(local_settings: Settings) -> None:
+    with pytest.raises(SetupError, match="DATABASE_URL"):
+        run_reminders(local_settings)
+
+
+def test_format_reminders() -> None:
+    output, code = format_reminders([], None)
+    assert output == "No reminders due.\nAdmin alerts skipped: ADMIN_EMAIL is not set."
+    assert code == 0
+
+    output, code = format_reminders([], AlertReport([], []))
+    assert output == "No reminders due.\nNo new admin alerts."
+
+    sent = [SendResult("a@x.org", "Reminder: A - 7 days left")]
+    report = AlertReport([SendResult("admin@x.org", "[SH] boom", "HTTP 500")], ["no_weekly_run"])
+    output, code = format_reminders(sent, report)
+    assert output.splitlines() == [
+        "Sent reminder: Reminder: A - 7 days left -> a@x.org",
+        "FAILED admin alert: [SH] boom -> admin@x.org",
+        "  HTTP 500",
+        "Resolved admin alert: no_weekly_run",
+    ]
+    assert code == 1

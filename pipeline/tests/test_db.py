@@ -318,6 +318,21 @@ def test_unchanged_extraction_records_no_changes(conn: Conn) -> None:
     assert _rows(conn, "select count(*) from changes") == [(0,)]
 
 
+def test_deadlines_keep_their_id_while_label_and_date_stay(conn: Conn) -> None:
+    """Reminders are recorded per deadline id, so re-extracting must not change it."""
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+    [(first_id,)] = _rows(conn, "select id from deadlines")
+
+    db.save_extraction(conn, "a", [_validated(cgpa="3.5")], "v2")  # same deadline
+    assert _rows(conn, "select id, evidence_id is not null from deadlines") == [(first_id, True)]
+
+    # The date changed (validation empties it: 20 January is not in the quote): a new row.
+    db.save_extraction(conn, "a", [_validated(deadline_day=20)], "v3")
+    [(new_id, day)] = _rows(conn, "select id, deadline_date from deadlines")
+    assert new_id != first_id and day is None
+
+
 def test_review_notes_are_saved(conn: Conn) -> None:
     _sync_example(conn, "a")
     unverified = _validated(deadline_day=25)  # 25 January is not in the quote
