@@ -56,7 +56,7 @@ def _sync_example(conn: Conn, *keys: str) -> None:
 # ---------- sync_sources ----------
 
 
-def test_sync_inserts_updates_and_deactivates(conn: Conn) -> None:
+def test_sync_inserts_and_updates_but_never_deactivates(conn: Conn) -> None:
     _sync_example(conn, "a", "b")
     assert _source_row(conn, "a")["active"] is True
 
@@ -65,13 +65,44 @@ def test_sync_inserts_updates_and_deactivates(conn: Conn) -> None:
 
     row_a = _source_row(conn, "a")
     assert (row_a["name"], row_a["type"], row_a["active"]) == ("New name", "lead", True)
-    assert _source_row(conn, "b")["active"] is False  # gone from the YAML -> inactive
+    assert _source_row(conn, "b")["active"] is True  # gone from the YAML: left alone
 
 
-def test_sync_keeps_inactive_flag_from_yaml(conn: Conn) -> None:
+def test_new_key_gets_the_active_flag_from_yaml(conn: Conn) -> None:
     db.sync_sources(conn, [make_source(key="a", active=False, note="Phase 2")])
     row = _source_row(conn, "a")
     assert (row["active"], row["note"]) == (False, "Phase 2")
+
+
+def test_dashboard_switch_wins_over_yaml(conn: Conn) -> None:
+    _sync_example(conn, "on", "off")
+    conn.execute("update sources set active = false where key = 'off'")  # paused in dashboard
+    db.sync_sources(conn, [make_source(key="on", url="https://example.edu.pk/on", active=False),
+                           make_source(key="off", url="https://example.edu.pk/off")])  # fmt: skip
+
+    assert _source_row(conn, "on")["active"] is True  # the file's false does not stop it
+    assert _source_row(conn, "off")["active"] is False  # the file's true does not restart it
+
+
+def test_all_sources_includes_dashboard_sources(conn: Conn) -> None:
+    seed = [make_source(key="a", url="https://example.edu.pk/a", include_links=True)]
+    db.sync_sources(conn, seed)
+    conn.execute(
+        "insert into sources (key, url, name, program_key, country, opportunity_type, location)"
+        " values ('dash', 'https://example.org/dash', 'Added in dashboard', null, 'DE',"
+        " 'admission', 'abroad')"
+    )
+    conn.execute("update sources set active = false where key = 'a'")
+    db.sync_sources(conn, seed)  # the next run: dash is not in the file
+
+    sources = db.all_sources(conn, seed)
+
+    assert [(s.key, s.active) for s in sources] == [("a", False), ("dash", True)]
+    assert sources[0].include_links is True  # kept from the file (no column for it)
+    assert sources[1].program_key == "dash"  # missing program key: same as the key
+    assert sources[1].name == "Added in dashboard"
+    new_in_file = make_source(key="new", url="https://example.edu.pk/new")
+    assert [s.key for s in db.all_sources(conn, [*seed, new_in_file])] == ["a", "new", "dash"]
 
 
 # ---------- save_result and last_hashes ----------
@@ -314,8 +345,22 @@ def test_second_save_replaces_details_and_records_changes(conn: Conn) -> None:
 def test_unchanged_extraction_records_no_changes(conn: Conn) -> None:
     _sync_example(conn, "a")
     db.save_extraction(conn, "a", [_validated()], "v1")
+    conn.execute("update scholarships set verified_at = now()")
     db.save_extraction(conn, "a", [_validated()], "v1")
     assert _rows(conn, "select count(*) from changes") == [(0,)]
+    assert _rows(conn, "select verified_at is not null from scholarships") == [(True,)]
+
+
+def test_a_change_clears_verified_at(conn: Conn) -> None:
+    """The owner checked the old facts; after a change it shows "not checked yet" again."""
+    _sync_example(conn, "a")
+    db.save_extraction(conn, "a", [_validated()], "v1")
+    conn.execute("update scholarships set verified_at = now()")
+
+    db.save_extraction(conn, "a", [_validated(deadline_day=20)], "v2")  # the deadline changed
+
+    assert ("deadlines",) in _rows(conn, "select field_path from changes")
+    assert _rows(conn, "select verified_at from scholarships") == [(None,)]
 
 
 def test_deadlines_keep_their_id_while_label_and_date_stay(conn: Conn) -> None:
@@ -534,6 +579,12 @@ def test_upsert_profile_by_email(conn: Conn) -> None:
     assert profile_id == str(first)
     assert (loaded.full_name, loaded.cgpa) == ("New Name", 3.5)
     assert loaded.reminder_days == [30, 14, 7, 2]
+
+
+def test_has_profile(conn: Conn) -> None:
+    assert db.has_profile(conn) is False
+    db.upsert_profile(conn, _profile())
+    assert db.has_profile(conn) is True
 
 
 def test_load_open_scholarships_and_save_matches(conn: Conn) -> None:

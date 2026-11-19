@@ -21,6 +21,8 @@
       <a href="/" class="text-sm hover:underline">Home</a>
       <a href="/scholarships" class="text-sm hover:underline">Scholarships</a>
       <a href="/runs" class="text-sm hover:underline">Runs</a>
+      <a href="/sources" class="text-sm hover:underline">Sources</a>
+      <a href="/profile" class="text-sm hover:underline">Profile</a>
       <form method="post" action="/logout" class="sm:ml-auto">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="text-sm text-slate-600 hover:underline">Log out</button>
@@ -50,7 +52,9 @@
       document.body.addEventListener("htmx:responseError", function (e) {
         var status = e.detail.xhr.status;
         show(status === 503 ? "The database could not be reached. Try again in a minute."
-                            : "Could not load the results (error " + status + ").");
+             : status === 403 ? "This page has expired. Reload it and try again."
+             : status === 404 ? "That item no longer exists. Reload the page."
+             : "Something went wrong (error " + status + ").");
       });
       document.body.addEventListener("htmx:sendError", function () {
         show("No connection to the dashboard server.");

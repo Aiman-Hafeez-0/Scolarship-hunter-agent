@@ -1,6 +1,8 @@
 """Tests for pipeline.run (the command line)."""
 
 import json
+import os
+import shutil
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -13,6 +15,7 @@ import respx
 from pipeline import db
 from pipeline.config import Settings
 from pipeline.graph import SourceOutcome
+from pipeline.migrate import apply_migrations
 from pipeline.models import Change, FetchStatus
 from pipeline.nodes.extract import extract_page
 from pipeline.nodes.validate import ValidatedScholarship, validate_extraction
@@ -79,6 +82,19 @@ def local_settings(settings: Settings, tmp_path: Path) -> Settings:
     )
 
 
+@pytest.fixture
+def db_settings(local_settings: Settings, test_conn: psycopg.Connection[Any]) -> Settings:
+    """local_settings pointing at the throwaway test schema (skipped without a test database)."""
+    apply_migrations(test_conn)
+    row = test_conn.execute("show search_path").fetchone()
+    assert row is not None
+    url = os.environ["TEST_DATABASE_URL"]
+    joiner = "&" if "?" in url else "?"
+    return local_settings.model_copy(
+        update={"database_url": f"{url}{joiner}options=-c%20search_path%3D{row[0]}"}
+    )
+
+
 def test_missing_database_url_is_a_clear_error(local_settings: Settings) -> None:
     with pytest.raises(SetupError, match="use --local or set DATABASE_URL"):
         run_fetch(local_settings, local=False, only=None)
@@ -99,6 +115,37 @@ def test_local_run_end_to_end(mock_http: respx.MockRouter, local_settings: Setti
     ]
     assert second[0].change is Change.UNCHANGED
     assert len(list((local_settings.data_dir / "snapshots" / "good").iterdir())) == 1
+
+
+def test_fetch_uses_the_database_list(
+    mock_http: respx.MockRouter, db_settings: Settings
+) -> None:
+    """Paused in the dashboard: skipped. Added in the dashboard: fetched, though not in the file."""
+    mock_http.get("https://example.edu.pk/robots.txt").respond(404)
+    mock_http.get("https://example.org/robots.txt").respond(404)
+    mock_http.get("https://example.edu.pk/good").respond(200, html=PAGE_HTML)
+    mock_http.get("https://example.org/dash").respond(200, html=PAGE_HTML)
+    run_fetch(db_settings.model_copy(update={"sources_file": _only_good(db_settings)}),
+              local=False, only="good")  # fmt: skip
+    assert db_settings.database_url is not None
+    with psycopg.connect(db_settings.database_url, autocommit=True) as conn:
+        conn.execute("update sources set active = false where key = 'good'")
+        conn.execute(
+            "insert into sources (key, url, name, program_key, country, opportunity_type,"
+            " location) values ('dash', 'https://example.org/dash', 'Dash', 'dash', 'DE',"
+            " 'admission', 'abroad')"
+        )
+
+    results = run_fetch(db_settings, local=False, only=None)
+
+    assert [r.source.key for r in results] == ["broken", "dash"]
+    assert run_fetch(db_settings, local=False, only="dash")[0].source.key == "dash"
+
+
+def _only_good(settings: Settings) -> Path:
+    path = settings.sources_file.with_name("good.yaml")
+    path.write_text(SOURCES_YAML.split("  - key: broken")[0], encoding="utf-8")
+    return path
 
 
 def test_choose_sources() -> None:
@@ -235,6 +282,29 @@ def test_profile_command_needs_profile_yaml(local_settings: Settings, tmp_path: 
     missing = local_settings.model_copy(update={"profile_file": tmp_path / "profile.yaml"})
     with pytest.raises(ProfileError, match="copy profile.example.yaml"):
         run_profile(missing)
+
+
+def test_profile_is_saved_only_once(db_settings: Settings, tmp_path: Path) -> None:
+    profile_file = tmp_path / "profile.yaml"
+    shutil.copy(Path(__file__).resolve().parents[2] / "profile.example.yaml", profile_file)
+    settings = db_settings.model_copy(update={"profile_file": profile_file})
+
+    assert run_profile(settings).startswith("Saved profile for Example Student")
+    with pytest.raises(SetupError, match="edit it in the dashboard instead"):
+        run_profile(settings)
+    assert run_profile(settings, force=True).startswith("Saved profile")
+
+
+def test_profile_force_flag_is_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_profile(settings: Settings, force: bool = False) -> str:
+        seen["force"] = force
+        return "ok"
+
+    monkeypatch.setattr("pipeline.run.run_profile", fake_profile)
+    assert main(["profile"]) == 0 and seen["force"] is False
+    assert main(["profile", "--force"]) == 0 and seen["force"] is True
 
 
 def test_match_command_needs_database_url(local_settings: Settings) -> None:

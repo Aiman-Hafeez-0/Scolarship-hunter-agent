@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "_macros.html" import source_card %}
+{% block title %}Sources · Scholarship Hunter{% endblock %}
+{% macro field(name, text, placeholder="", required=false, help="") -%}
+  <label class="block">
+    <span class="text-xs font-medium text-slate-600">{{ text }}{% if required %} *{% endif %}</span>
+    <input name="{{ name }}" value="{{ values.get(name, '') }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
+           class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm">
+    {% if help %}<span class="text-xs text-slate-500">{{ help }}</span>{% endif %}
+  </label>
+{%- endmacro %}
+{% macro choice(name, text, options, default) -%}
+  <label class="block">
+    <span class="text-xs font-medium text-slate-600">{{ text }} *</span>
+    <select name="{{ name }}" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm">
+      {% for option in options %}
+      <option value="{{ option }}" {% if values.get(name, default) == option %}selected{% endif %}>{{ option | label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+{%- endmacro %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Sources</h1>
+
+{% if added %}
+<section role="status" class="mb-6 rounded border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-900">
+  <p class="font-medium">Saved "{{ added.name }}": robots.txt allows it. The next run checks it.</p>
+  <details class="mt-2">
+    <summary class="cursor-pointer">Optional: the same entry for <code>pipeline/sources.yaml</code></summary>
+    <pre class="mt-2 overflow-x-auto rounded bg-white border border-green-200 p-3 text-xs text-slate-800">{{ added_yaml }}</pre>
+  </details>
+</section>
+{% endif %}
+
+<details class="mb-6 bg-white rounded-lg border border-slate-200 p-4" {% if errors %}open{% endif %}>
+  <summary class="cursor-pointer font-semibold">Add a source</summary>
+  {% if errors %}
+  <ul role="alert" class="mt-3 rounded border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 list-disc list-inside">
+    {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <form method="post" action="/sources" class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3"
+        onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Checking robots.txt…'">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {{ field("url", "Page URL", "https://...", true, "Must start with https:// and be public (no login).") }}
+    {{ field("name", "Name", "Example University MS admissions", true) }}
+    {{ field("key", "Key", "example-uni-ms", true, "Lowercase letters, digits and dashes.") }}
+    {{ field("program_key", "Program key", "", false, "Blank = same as the key.") }}
+    {{ field("country", "Country", "PK", true) }}
+    {{ choice("opportunity_type", "Type", ["scholarship", "admission", "entry_test"], "scholarship") }}
+    {{ choice("location", "Location", ["abroad", "pakistan"], "abroad") }}
+    {{ choice("type", "Trust", ["official", "lead"], "official") }}
+    {{ field("note", "Note") }}
+    <label class="inline-flex items-center gap-2 text-sm self-end">
+      <input type="checkbox" name="is_pdf" value="1" {% if values.get('is_pdf') %}checked{% endif %}> The URL is a PDF file
+    </label>
+    <div class="sm:col-span-2">
+      <button class="rounded bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-60">Check and save</button>
+    </div>
+  </form>
+</details>
+
+<p class="text-sm text-slate-600 mb-2">{{ sources | length }} sources</p>
+<ul class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+  {% for s in sources %}{{ source_card(s, csrf_token) }}{% endfor %}
+</ul>
+{% endblock %}

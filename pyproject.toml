@@ -54,3 +54,7 @@ dev = [
     "ruff>=0.17.5",
     "types-pyyaml>=6.0.12.20261113",
 ]
+# Browser test only (app/tests/test_e2e.py). Not installed by `uv sync`; see the README.
+e2e = [
+    "playwright>=1.65.2",
+]

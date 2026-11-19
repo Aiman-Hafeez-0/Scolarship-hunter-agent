@@ -126,7 +126,7 @@ def test_postgres_store_reads_everything(conn: Conn) -> None:
     assert detail.review_notes == ["check the fee"]
     funding = next(f for f in detail.fields if f.label == "Funding")
     assert funding.quotes[0].text == "Full tuition waiver."
-    first = detail.deadlines[0]
+    first = next(d for d in detail.deadlines if d.label == "Apply")
     assert first.quote is not None and first.quote.text == "Apply by 15 January 2027."
     assert detail.match is not None and detail.match.score == 85
     assert detail.changes[0].new_value == "open"
@@ -135,3 +135,44 @@ def test_postgres_store_reads_everything(conn: Conn) -> None:
     [run] = store.runs(10)
     assert (run.kind, run.status, run.sources_total) == ("weekly", "success", 18)
     assert store.last_good_weekly_at() is not None
+
+
+def test_postgres_store_actions(conn: Conn) -> None:
+    from app.queries import ProfileEmailTaken
+    from app.tests.conftest import profile
+    from pipeline.models import Source
+
+    store = PostgresDashboardStore(conn)
+    new = Source(key="a-ms", name="A MS", url="https://www.example.edu/a", program_key="a-ms",
+                 country="DE", opportunity_type="admission", location="abroad")  # fmt: skip
+
+    assert store.add_source(new) is True
+    assert store.add_source(new) is False  # same key and url
+    [row_] = store.sources()
+    assert (row_.key, row_.active, row_.robots_allowed) == ("a-ms", True, True)
+    assert row_.robots_checked_at is not None
+    toggled = store.set_source_active("a-ms", False)
+    assert toggled is not None and toggled.active is False
+    assert store.set_source_active("nope", True) is None
+
+    sid = _one(conn, "insert into scholarships (source_id, name, opportunity_type, location)"
+               " select id, 'A', 'admission', 'abroad' from sources returning id", ())  # fmt: skip
+    assert store.verify(sid) is not None
+    assert store.verify("11111111-1111-1111-1111-111111111111") is None
+    assert store.verify("not-a-uuid") is None
+
+    first_id = store.save_profile(None, profile(), paused=False)  # creates it
+    record = store.profile(first_id)
+    assert record is not None and record.profile == profile() and not record.emails_paused
+    store.save_profile(first_id, profile(cgpa=3.6, reminder_days=[10]), paused=True)
+    record = store.profile(first_id)
+    assert record is not None and record.profile.cgpa == 3.6 and record.emails_paused
+    assert record.profile.reminder_days == [10]
+
+    other_id = store.save_profile(None, profile(email="other@example.com"), paused=False)
+    try:
+        store.save_profile(other_id, profile(), paused=False)  # first profile's email
+    except ProfileEmailTaken:
+        pass
+    else:
+        raise AssertionError("expected ProfileEmailTaken")

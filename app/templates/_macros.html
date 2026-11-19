@@ -37,3 +37,53 @@
     <blockquote class="mt-1 border-l-4 border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-slate-800 italic">"{{ quote.text }}"</blockquote>
   </details>
 {%- endmacro %}
+
+{# The "checked" badge plus its button. The button's answer replaces this whole box. #}
+{% macro verify_box(sid, verified_at, csrf_token) -%}
+  <form id="verify-status" method="post" action="/scholarships/{{ sid }}/verify"
+        hx-post="/scholarships/{{ sid }}/verify" hx-target="this" hx-swap="outerHTML"
+        hx-disabled-elt="find button" class="inline-flex flex-wrap items-center gap-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if verified_at %}
+    <span class="inline-block rounded px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 border border-green-300">checked {{ verified_at | pkt }}</span>
+    {% else %}{{ unchecked_label() }}{% endif %}
+    <button class="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs hover:bg-slate-50"
+            title="Click after comparing these facts with the official page yourself">
+      <span class="htmx-indicator">Saving…</span>
+      {% if verified_at %}Mark checked again{% else %}I checked this{% endif %}
+    </button>
+  </form>
+{%- endmacro %}
+
+{# One source as a card, with its active switch. The switch's answer replaces the card. #}
+{% macro source_card(s, csrf_token) -%}
+  <li id="source-{{ s.key }}" class="bg-white rounded-lg border p-4 text-sm {% if s.active %}border-slate-200{% else %}border-slate-200 opacity-70{% endif %}">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <div class="font-medium break-words">{{ s.name }}</div>
+        <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="text-xs text-indigo-700 hover:underline break-all">{{ s.url }}</a>
+        <div class="text-xs text-slate-500">{{ s.key }} · {{ s.opportunity_type | label }} · {{ s.location }}</div>
+      </div>
+      <form method="post" action="/sources/{{ s.key }}/active"
+            hx-post="/sources/{{ s.key }}/active" hx-target="#source-{{ s.key }}" hx-swap="outerHTML"
+            hx-disabled-elt="find button">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="active" value="{{ '0' if s.active else '1' }}">
+        <button role="switch" aria-checked="{{ 'true' if s.active else 'false' }}" aria-label="Active"
+                class="whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium {% if s.active %}bg-green-100 text-green-800 border border-green-300{% else %}bg-slate-100 text-slate-600 border border-slate-300{% endif %}">
+          <span class="htmx-indicator">…</span>{{ 'Active' if s.active else 'Paused' }}
+        </button>
+      </form>
+    </div>
+    <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+      <dt class="text-slate-500">Last fetch</dt><dd>{{ s.last_fetched_at | pkt }}</dd>
+      <dt class="text-slate-500">Last HTTP status</dt><dd>{{ s.last_http_status or '-' }}</dd>
+      <dt class="text-slate-500">Failures in a row</dt>
+      <dd class="{% if s.consecutive_failures %}text-red-700 font-medium{% endif %}">{{ s.consecutive_failures }}</dd>
+      <dt class="text-slate-500">robots.txt</dt>
+      <dd>{% if s.robots_allowed is none %}not checked yet{% elif s.robots_allowed %}allowed{% else %}<span class="text-red-700 font-medium">blocked</span>{% endif %}{% if s.robots_checked_at %} ({{ s.robots_checked_at | pkt }}){% endif %}</dd>
+    </dl>
+    {% if s.last_error and s.consecutive_failures %}<p class="mt-2 text-xs text-red-700 break-words">{{ s.last_error }}</p>{% endif %}
+    {% if s.note %}<p class="mt-2 text-xs text-slate-600">{{ s.note }}</p>{% endif %}
+  </li>
+{%- endmacro %}

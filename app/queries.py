@@ -12,8 +12,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal, Protocol
 
-from pipeline.db import Conn
+from psycopg import errors
+
+from pipeline.db import PROFILE_COLUMNS, Conn, upsert_profile
+from pipeline.models import Source
 from pipeline.notify.store import PostgresNotifyStore
+from pipeline.profile import Profile
 
 OPPORTUNITY_TYPES = ("scholarship", "admission", "entry_test")
 LOCATIONS = ("abroad", "pakistan")
@@ -142,6 +146,34 @@ class ScholarshipDetail:
     changes: list[ChangeEntry]
 
 
+@dataclass
+class SourceRow:
+    key: str
+    name: str
+    url: str
+    opportunity_type: str
+    location: str
+    active: bool
+    last_fetched_at: datetime | None
+    last_http_status: int | None
+    consecutive_failures: int
+    last_error: str | None
+    robots_allowed: bool | None  # None: never checked; False: robots.txt blocked us
+    robots_checked_at: datetime | None
+    note: str | None
+
+
+@dataclass
+class ProfileRecord:
+    id: str
+    profile: Profile
+    emails_paused: bool
+
+
+class ProfileEmailTaken(ValueError):
+    """Another profile already uses this email."""
+
+
 class DashboardStore(Protocol):
     def profile_id(self, email: str) -> str | None: ...
     def scholarship_rows(self, profile_id: str | None, today: date) -> list[ScholarshipRow]: ...
@@ -151,6 +183,13 @@ class DashboardStore(Protocol):
     ) -> ScholarshipDetail | None: ...
     def runs(self, limit: int) -> list[RunRow]: ...
     def last_good_weekly_at(self) -> datetime | None: ...
+    # Actions (they write)
+    def verify(self, scholarship_id: str) -> datetime | None: ...
+    def sources(self) -> list[SourceRow]: ...
+    def set_source_active(self, key: str, active: bool) -> SourceRow | None: ...
+    def add_source(self, source: Source) -> bool: ...
+    def profile(self, profile_id: str) -> ProfileRecord | None: ...
+    def save_profile(self, profile_id: str | None, profile: Profile, paused: bool) -> str: ...
 
 
 # ---------- Filters ----------
@@ -474,3 +513,86 @@ class PostgresDashboardStore:
 
     def last_good_weekly_at(self) -> datetime | None:
         return self.notify.last_good_weekly_at()
+
+    # ---------- Actions ----------
+
+    def verify(self, scholarship_id: str) -> datetime | None:
+        """Mark a scholarship as checked by you, now. None if there is no such scholarship."""
+        try:
+            sid = uuid.UUID(scholarship_id)
+        except ValueError:
+            return None
+        found = self.conn.execute(
+            "update scholarships set verified_at = now() where id = %s returning verified_at",
+            (sid,),
+        ).fetchone()
+        return None if found is None else found[0]
+
+    def sources(self) -> list[SourceRow]:
+        rows = self.conn.execute(SOURCE_ROWS + " order by active desc, key").fetchall()
+        return [_source_row(r) for r in rows]
+
+    def set_source_active(self, key: str, active: bool) -> SourceRow | None:
+        self.conn.execute("update sources set active = %s where key = %s", (active, key))
+        found = self.conn.execute(SOURCE_ROWS + " where key = %s", (key,)).fetchone()
+        return None if found is None else _source_row(found)
+
+    def add_source(self, source: Source) -> bool:
+        """Insert a new source (robots.txt was just checked). False if its key or url exists."""
+        found = self.conn.execute(
+            """
+            insert into sources (key, url, name, program_key, country, type, opportunity_type,
+                                 location, render_js, is_pdf, active, note, robots_allowed,
+                                 robots_checked_at)
+            values (%(key)s, %(url)s, %(name)s, %(program_key)s, %(country)s,
+                    %(type)s::source_type, %(opportunity_type)s, %(location)s, %(render_js)s,
+                    %(is_pdf)s, %(active)s, %(note)s, true, now())
+            on conflict do nothing
+            returning id
+            """,
+            source.model_dump(mode="json"),
+        ).fetchone()
+        return found is not None
+
+    def profile(self, profile_id: str) -> ProfileRecord | None:
+        found = self.conn.execute(
+            f"select {', '.join(PROFILE_COLUMNS)}, emails_paused from profiles where id = %s",
+            (uuid.UUID(profile_id),),
+        ).fetchone()
+        if found is None:
+            return None
+        data = dict(zip(PROFILE_COLUMNS, found[: len(PROFILE_COLUMNS)], strict=True))
+        return ProfileRecord(profile_id, Profile.model_validate(data), bool(found[-1]))
+
+    def save_profile(self, profile_id: str | None, profile: Profile, paused: bool) -> str:
+        """Update the profile (or create it when there is none yet). Returns its id."""
+        values = profile.model_dump()
+        try:
+            with self.conn.transaction():
+                if profile_id is None:
+                    profile_id = str(upsert_profile(self.conn, profile))
+                else:
+                    updates = ", ".join(f"{c} = %({c})s" for c in PROFILE_COLUMNS)
+                    self.conn.execute(f"update profiles set {updates} where id = %(id)s",
+                                      {**values, "id": uuid.UUID(profile_id)})  # fmt: skip
+                self.conn.execute("update profiles set emails_paused = %s where id = %s",
+                                  (paused, uuid.UUID(profile_id)))  # fmt: skip
+        except errors.UniqueViolation as exc:
+            raise ProfileEmailTaken(profile.email) from exc
+        return profile_id
+
+
+SOURCE_ROWS = """
+select key, name, url, opportunity_type, location, active, last_fetched_at, last_http_status,
+       consecutive_failures, last_error, robots_allowed, robots_checked_at, note
+from sources
+"""
+
+
+def _source_row(r: Any) -> SourceRow:
+    return SourceRow(
+        key=str(r[0]), name=str(r[1]), url=str(r[2]), opportunity_type=str(r[3]),
+        location=str(r[4]), active=bool(r[5]), last_fetched_at=r[6], last_http_status=r[7],
+        consecutive_failures=int(r[8]), last_error=r[9], robots_allowed=r[10],
+        robots_checked_at=r[11], note=r[12],
+    )  # fmt: skip

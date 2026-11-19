@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import days_badge, match_badge, review_badge, unchecked_label, quote_box %}
+{% from "_macros.html" import days_badge, match_badge, review_badge, quote_box, verify_box %}
 {% block title %}{{ d.name }} · Scholarship Hunter{% endblock %}
 {% block content %}
 <p class="mb-2 text-sm"><a href="/scholarships" class="text-indigo-700 hover:underline">← All scholarships</a></p>
@@ -8,7 +8,7 @@
   <h1 class="text-2xl font-semibold break-words">{{ d.name }}</h1>
   <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
     {% if d.needs_review %}{{ review_badge() }}{% endif %}
-    {% if not d.verified_at %}{{ unchecked_label() }}{% else %}<span class="text-slate-600">checked {{ d.verified_at | pkt }}</span>{% endif %}
+    {{ verify_box(d.id, d.verified_at, csrf_token) }}
     {% if d.match %}{{ match_badge(d.match.status) }} <span>score {{ d.match.score }}</span>{% else %}{{ match_badge(none) }}{% endif %}
   </div>
   <p class="mt-2 text-sm text-slate-600">

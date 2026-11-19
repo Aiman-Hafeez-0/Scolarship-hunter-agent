@@ -1,0 +1,4 @@
+<p role="status" class="rounded border px-3 py-2 text-sm {% if r.ok %}border-green-300 bg-green-50 text-green-900{% else %}border-red-300 bg-red-50 text-red-800{% endif %}">
+  {{ r.message }}
+  {% if r.actions_url %}<a href="{{ r.actions_url }}" target="_blank" rel="noopener noreferrer" class="underline ml-1">Open the Actions page</a>{% endif %}
+</p>

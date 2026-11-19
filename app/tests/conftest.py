@@ -16,15 +16,20 @@ from app.queries import (
     DeadlineDetail,
     FieldRow,
     MatchInfo,
+    ProfileEmailTaken,
+    ProfileRecord,
     Quote,
     RunRow,
     ScholarshipDetail,
     ScholarshipRow,
+    SourceRow,
     UpcomingDeadline,
 )
 from pipeline.config import Settings
 from pipeline.migrate import apply_migrations
-from pipeline.tests.conftest import test_conn  # noqa: F401  (a fixture used by `conn`)
+from pipeline.models import Source
+from pipeline.profile import Profile
+from pipeline.tests.conftest import mock_http, test_conn  # noqa: F401  (fixtures used here)
 
 EMAIL = "owner@example.com"
 PASSWORD = "correct horse battery"
@@ -48,6 +53,8 @@ def make_settings(**overrides: object) -> Settings:
         "dashboard_password_hash": PASSWORD_HASH,
         "session_secret": "x" * 40,
         "database_url": None,
+        "contact_email": "bot@example.com",
+        "per_domain_delay_s": 0,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[arg-type]
@@ -102,6 +109,28 @@ def run_row(**overrides: object) -> RunRow:
     return RunRow(**values)  # type: ignore[arg-type]
 
 
+def source_row(**overrides: object) -> SourceRow:
+    values: dict[str, object] = {
+        "key": "nust-pg", "name": "NUST Postgraduate", "url": "https://nust.edu.pk/pg",
+        "opportunity_type": "admission", "location": "pakistan", "active": True,
+        "last_fetched_at": datetime(2026, 11, 18, 3, 17, tzinfo=UTC), "last_http_status": 503,
+        "consecutive_failures": 3, "last_error": "HTTP 503", "robots_allowed": True,
+        "robots_checked_at": datetime(2026, 11, 18, 3, 17, tzinfo=UTC), "note": "Fall intake",
+    }  # fmt: skip
+    values.update(overrides)
+    return SourceRow(**values)  # type: ignore[arg-type]
+
+
+def profile(**overrides: object) -> Profile:
+    values: dict[str, object] = {
+        "full_name": "Owner Name", "email": EMAIL, "degree": "BS Computer Science",
+        "cgpa": 3.2, "target_fields": ["Artificial Intelligence", "Data Science"],
+        "target_intake": "Fall 2027",
+    }  # fmt: skip
+    values.update(overrides)
+    return Profile.model_validate(values)
+
+
 @dataclass
 class FakeStore:
     """The DashboardStore methods, answered from lists. `calls` records what was asked."""
@@ -112,6 +141,13 @@ class FakeStore:
     run_rows: list[RunRow] = field(default_factory=lambda: [run_row()])
     last_good: datetime | None = field(default_factory=lambda: datetime.now(UTC))
     calls: list[str] = field(default_factory=list)
+    source_rows: list[SourceRow] = field(default_factory=lambda: [source_row()])
+    added: list[Source] = field(default_factory=list)
+    profile_record: ProfileRecord | None = field(
+        default_factory=lambda: ProfileRecord("p1", profile(), False)
+    )
+    saved_profiles: list[tuple[str | None, Profile, bool]] = field(default_factory=list)
+    taken_emails: set[str] = field(default_factory=set)
 
     def profile_id(self, email: str) -> str | None:
         self.calls.append(f"profile_id:{email}")
@@ -131,6 +167,39 @@ class FakeStore:
 
     def last_good_weekly_at(self) -> datetime | None:
         return self.last_good
+
+    def verify(self, scholarship_id: str) -> datetime | None:
+        found = self.details.get(scholarship_id)
+        if found is None:
+            return None
+        found.verified_at = datetime.now(UTC)
+        return found.verified_at
+
+    def sources(self) -> list[SourceRow]:
+        return list(self.source_rows)
+
+    def set_source_active(self, key: str, active: bool) -> SourceRow | None:
+        for source in self.source_rows:
+            if source.key == key:
+                source.active = active
+                return source
+        return None
+
+    def add_source(self, source: Source) -> bool:
+        known = [(s.key, s.url) for s in self.source_rows] + [(s.key, s.url) for s in self.added]
+        if any(source.key == key or source.url == url for key, url in known):
+            return False
+        self.added.append(source)
+        return True
+
+    def profile(self, profile_id: str) -> ProfileRecord | None:
+        return self.profile_record
+
+    def save_profile(self, profile_id: str | None, profile: Profile, paused: bool) -> str:
+        if profile.email in self.taken_emails:
+            raise ProfileEmailTaken(profile.email)
+        self.saved_profiles.append((profile_id, profile, paused))
+        return profile_id or "new-id"
 
 
 @pytest.fixture

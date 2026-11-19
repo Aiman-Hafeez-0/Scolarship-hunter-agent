@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     dashboard_password_hash: str | None = Field(default=None, repr=False)
     session_secret: str | None = Field(default=None, repr=False)
 
+    # The dashboard's "Run now" button starts .github/workflows/weekly.yml through the GitHub
+    # API. Use a fine-grained token with only "Actions: write" on this one repository.
+    github_token: str | None = Field(default=None, repr=False)
+    github_repo: str = ""  # "owner/name"
+    github_ref: str = "main"  # the branch whose weekly.yml is run
+
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")
     data_dir: Path = Path("data")

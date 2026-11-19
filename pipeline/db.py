@@ -1,7 +1,7 @@
 """Read and write pipeline data in Postgres (psycopg 3, synchronous).
 
 Every function that writes uses conn.transaction(), so its changes are saved all together
-or not at all. Sources are always looked up by their `key` from sources.yaml.
+or not at all. Sources are always looked up by their `key`.
 """
 
 import gzip
@@ -39,23 +39,52 @@ on conflict (key) do update set
     location = excluded.location,
     render_js = excluded.render_js,
     is_pdf = excluded.is_pdf,
-    active = excluded.active,
     note = excluded.note
 """
 
+SOURCE_COLUMNS = ["key", "url", "name", "program_key", "country", "type", "opportunity_type",
+                  "location", "render_js", "is_pdf", "active", "note"]  # fmt: skip
+# The sources table has no include_links column: that setting lives only in sources.yaml.
+
 
 def sync_sources(conn: Conn, sources: list[Source]) -> None:
-    """Make the sources table match sources.yaml.
+    """Copy the seed list (sources.yaml) into the sources table.
 
-    Pass every source from the YAML, inactive ones included. Rows whose key is no longer
-    in the YAML are kept (their history matters) but marked inactive.
+    The database is the source of truth. A key that is new in the file is inserted with the
+    file's `active`. An existing row gets the file's description (url, name, ...) but keeps
+    its own `active` (the dashboard switch). Rows not in the file are left alone: they may
+    have been added from the dashboard, and removing a key from the file does not stop it.
     """
     with conn.transaction(), conn.cursor() as cur:
         cur.executemany(UPSERT_SOURCE, [s.model_dump(mode="json") for s in sources])
-        cur.execute(
-            "update sources set active = false where active and not (key = any(%s))",
-            ([s.key for s in sources],),
-        )
+
+
+def all_sources(conn: Conn, seed: list[Source]) -> list[Source]:
+    """Every source, with `active` as stored in the database. Reads only.
+
+    A source that is in the seed list keeps the file's settings that the table has no
+    column for (include_links); a source added from the dashboard is built from its row.
+    A seed source not saved yet (only `extract`, which writes nothing) is used as it is.
+    """
+    by_key = {s.key: s for s in seed}
+    rows = conn.execute(
+        """
+        select key, url, name, program_key, country, type::text, opportunity_type,
+               location, render_js, is_pdf, active, note
+        from sources order by key
+        """
+    ).fetchall()
+    from_db: dict[str, Source] = {}
+    for row in rows:
+        data = dict(zip(SOURCE_COLUMNS, row, strict=True))
+        key = str(data["key"])
+        if key in by_key:
+            from_db[key] = by_key[key].model_copy(update={"active": bool(data["active"])})
+        else:
+            data["program_key"] = data["program_key"] or key
+            from_db[key] = Source.model_validate(data)
+    seeded = [from_db.pop(s.key, s) for s in seed]
+    return seeded + list(from_db.values())
 
 
 def last_hashes(conn: Conn) -> dict[str, str]:
@@ -405,13 +434,18 @@ def _save_scholarship(
         )
 
     if previous is not None and previous[0] is not None:
-        for field_path, old, new in changed_fields(previous[0], facts):
+        changed = changed_fields(previous[0], facts)
+        for field_path, old, new in changed:
             conn.execute(
                 """
                 insert into changes (scholarship_id, field_path, old_value, new_value)
                 values (%s, %s, %s, %s)
                 """,
                 (scholarship_id, field_path, _json_or_null(old), _json_or_null(new)),
+            )
+        if changed:  # what the owner checked is out of date: show "not checked yet" again
+            conn.execute(
+                "update scholarships set verified_at = null where id = %s", (scholarship_id,)
             )
 
 
@@ -522,6 +556,11 @@ def upsert_profile(conn: Conn, profile: Profile) -> uuid.UUID:
         ).fetchone()
     assert row is not None
     return uuid.UUID(str(row[0]))
+
+
+def has_profile(conn: Conn) -> bool:
+    """True if the profiles table has at least one profile."""
+    return conn.execute("select exists (select 1 from profiles)").fetchone() == (True,)
 
 
 def load_profiles(conn: Conn) -> list[tuple[str, Profile]]:

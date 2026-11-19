@@ -2,7 +2,24 @@
 {% from "_macros.html" import run_badge %}
 {% block title %}Runs · Scholarship Hunter{% endblock %}
 {% block content %}
-<h1 class="text-2xl font-semibold mb-4">Runs</h1>
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+  <h1 class="text-2xl font-semibold">Runs</h1>
+  {% if github_problem %}
+  <p class="text-sm text-slate-600">"Run now" needs setup: {{ github_problem }}</p>
+  {% else %}
+  <form method="post" action="/runs/dispatch" hx-post="/runs/dispatch" hx-target="#dispatch-result"
+        hx-disabled-elt="find button">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="rounded bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"
+            title="Starts the weekly workflow on GitHub Actions now">
+      <span class="htmx-indicator">Starting…</span> Run now
+    </button>
+  </form>
+  {% endif %}
+</div>
+<div id="dispatch-result" class="mb-4" aria-live="polite">
+  {% if dispatch %}{% with r = dispatch %}{% include "_dispatch.html" %}{% endwith %}{% endif %}
+</div>
 
 {% if not runs %}
 <div class="bg-white rounded-lg border border-slate-200 p-6 text-center text-slate-600">No runs recorded yet.</div>

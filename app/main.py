@@ -19,7 +19,14 @@ from fastapi import APIRouter, Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from app import auth
+from app import auth, github
+from app.forms import (
+    parse_profile_form,
+    parse_source_form,
+    profile_form_values,
+    robots_allows,
+    source_yaml,
+)
 from app.queries import (
     FUNDING_TYPES,
     LOCATIONS,
@@ -28,9 +35,12 @@ from app.queries import (
     OPPORTUNITY_TYPES,
     DashboardStore,
     PostgresDashboardStore,
+    ProfileEmailTaken,
+    ProfileRecord,
     RunRow,
     ScholarshipDetail,
     ScholarshipRow,
+    SourceRow,
     UpcomingDeadline,
     days_left,
     deadline_tone,
@@ -360,8 +370,123 @@ def scholarship_page(request: Request, sid: str, user: UserDep, store: StoreDep,
 
 
 @protected.get("/runs", response_class=HTMLResponse)
-def runs_page(request: Request, user: UserDep, store: StoreDep) -> Response:
-    return render(request, "runs.html", {"runs": store.runs(100), "user": user})
+def runs_page(request: Request, user: UserDep, store: StoreDep, settings: SettingsDep) -> Response:
+    return render(request, "runs.html", runs_context(store, user, settings))
+
+
+def runs_context(store: DashboardStore, user: str, settings: Settings) -> dict[str, Any]:
+    return {"runs": store.runs(100), "user": user, "dispatch": None,
+            "github_problem": github.setup_problem(settings)}  # fmt: skip
+
+
+# ---------- Actions (POST: they all need the CSRF token) ----------
+
+
+def _is_htmx(request: Request) -> bool:
+    return bool(request.headers.get("hx-request"))
+
+
+async def _form(request: Request) -> dict[str, str]:
+    form = await request.form()
+    return {key: value for key, value in form.items() if isinstance(value, str)}
+
+
+@protected.post("/scholarships/{sid}/verify", dependencies=[CsrfDep])
+def verify_scholarship(request: Request, sid: str, user: UserDep, store: StoreDep) -> Response:
+    """Record that you checked this item against the official page yourself."""
+    verified_at = store.verify(sid)
+    if verified_at is None:
+        return JSONResponse({"detail": "Not found."}, status_code=404)
+    if not _is_htmx(request):
+        return RedirectResponse(f"/scholarships/{sid}", status_code=303)
+    return render(request, "_verify.html", {"sid": sid, "verified_at": verified_at})
+
+
+def sources_context(store: DashboardStore, user: str, **extra: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {"sources": store.sources(), "user": user, "values": {},
+                               "errors": [], "added": None, "added_yaml": ""}  # fmt: skip
+    return context | extra
+
+
+@protected.get("/sources", response_class=HTMLResponse)
+def sources_page(request: Request, user: UserDep, store: StoreDep) -> Response:
+    return render(request, "sources.html", sources_context(store, user))
+
+
+@protected.post("/sources/{key}/active", dependencies=[CsrfDep])
+async def toggle_source(request: Request, key: str, user: UserDep, store: StoreDep) -> Response:
+    active = (await _form(request)).get("active") == "1"
+    source = store.set_source_active(key, active)
+    if source is None:
+        return JSONResponse({"detail": "Not found."}, status_code=404)
+    if not _is_htmx(request):
+        return RedirectResponse("/sources", status_code=303)
+    return render(request, "_source_card.html", {"s": source})
+
+
+@protected.post("/sources", response_class=HTMLResponse, dependencies=[CsrfDep])
+async def add_source(
+    request: Request, user: UserDep, store: StoreDep, settings: SettingsDep
+) -> Response:
+    """Check the new page (https, robots.txt) and save it. The next run picks it up."""
+    values = await _form(request)
+    source, errors = parse_source_form(values)
+    if source is not None and not settings.contact_email:
+        errors = ["Set CONTACT_EMAIL in .env first: it goes in the User-Agent we send."]
+    elif source is not None and not await robots_allows(source.url, settings):
+        errors = ["robots.txt on this site does not allow ScholarshipHunterBot to fetch this "
+                  "page (or the site could not be reached). Nothing was saved."]  # fmt: skip
+    elif source is not None and not store.add_source(source):
+        errors = [f"A source with key '{source.key}' or this URL already exists."]
+    if errors or source is None:
+        context = sources_context(store, user, values=values, errors=errors)
+        return render(request, "sources.html", context, 400)
+    context = sources_context(store, user, added=source, added_yaml=source_yaml(source))
+    return render(request, "sources.html", context)
+
+
+def profile_context(store: DashboardStore, user: str) -> tuple[str | None, ProfileRecord | None]:
+    profile_id = store.profile_id(user)
+    return profile_id, (store.profile(profile_id) if profile_id else None)
+
+
+@protected.get("/profile", response_class=HTMLResponse)
+def profile_page(request: Request, user: UserDep, store: StoreDep) -> Response:
+    _, record = profile_context(store, user)
+    values = profile_form_values(record.profile if record else None,
+                                 record.emails_paused if record else False)  # fmt: skip
+    saved = request.query_params.get("saved") == "1"
+    return render(request, "profile.html", {"values": values, "errors": [], "saved": saved,
+                                            "user": user, "is_new": record is None})  # fmt: skip
+
+
+@protected.post("/profile", response_class=HTMLResponse, dependencies=[CsrfDep])
+async def save_profile(request: Request, user: UserDep, store: StoreDep) -> Response:
+    form = await _form(request)
+    profile, paused, errors = parse_profile_form(form)
+    profile_id, record = profile_context(store, user)
+    if profile is not None:
+        try:
+            store.save_profile(profile_id if record else None, profile, paused)
+        except ProfileEmailTaken:
+            errors = [f"email: another profile already uses {profile.email}"]
+        else:
+            return RedirectResponse("/profile?saved=1", status_code=303)
+    context = {"values": form, "errors": errors, "saved": False, "user": user,
+               "is_new": record is None}  # fmt: skip
+    return render(request, "profile.html", context, 400)
+
+
+@protected.post("/runs/dispatch", response_class=HTMLResponse, dependencies=[CsrfDep])
+async def run_now(
+    request: Request, user: UserDep, store: StoreDep, settings: SettingsDep
+) -> Response:
+    """Start weekly.yml on GitHub. Answers 200 even when GitHub refused, so HTMX shows why."""
+    result = await github.dispatch_weekly(settings)
+    if _is_htmx(request):
+        return render(request, "_dispatch.html", {"r": result})
+    context = runs_context(store, user, settings) | {"dispatch": result}
+    return render(request, "runs.html", context)
 
 
 # ---------- JSON API ----------
@@ -385,6 +510,19 @@ def api_scholarship(sid: str, user: UserDep, store: StoreDep) -> ScholarshipDeta
     if detail is None:
         return JSONResponse({"detail": "Not found."}, status_code=404)
     return detail
+
+
+@protected.get("/api/v1/sources")
+def api_sources(store: StoreDep) -> list[SourceRow]:
+    return store.sources()
+
+
+@protected.get("/api/v1/profile", response_model=None)
+def api_profile(user: UserDep, store: StoreDep) -> ProfileRecord | Response:
+    _, record = profile_context(store, user)
+    if record is None:
+        return JSONResponse({"detail": "No profile yet."}, status_code=404)
+    return record
 
 
 @protected.get("/api/v1/runs")

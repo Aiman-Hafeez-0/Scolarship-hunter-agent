@@ -14,7 +14,9 @@
     uv run python -m pipeline.run weekly --provider groq
                                                         which LLM to use: auto (default: Gemini,
                                                         Groq as fallback), gemini or groq
-    uv run python -m pipeline.run profile               save profile.yaml to the profiles table
+    uv run python -m pipeline.run profile [--force]     save profile.yaml to the profiles table
+                                                        (only the first time; --force overwrites
+                                                        the profile edited in the dashboard)
     uv run python -m pipeline.run match                 match every profile against every
                                                         scholarship that is not closed
     uv run python -m pipeline.run digest [--dry-run]    email the weekly digest to every profile
@@ -78,7 +80,7 @@ def choose_sources(all_sources: list[Source], only: str | None) -> list[Source]:
     for source in all_sources:
         if source.key == only:
             return [source]
-    raise SetupError(f"No source with key '{only}' in sources.yaml")
+    raise SetupError(f"No source with key '{only}' in sources.yaml or the database")
 
 
 def format_summary(results: list[FetchResult]) -> str:
@@ -125,10 +127,10 @@ def run_fetch(settings: Settings, local: bool, only: str | None) -> list[FetchRe
     if not local and not settings.database_url:
         raise SetupError("DATABASE_URL is not set: use --local or set DATABASE_URL in .env")
 
-    all_sources = load_sources(settings.sources_file, include_inactive=True)
-    chosen = choose_sources(all_sources, only)
+    seed = load_sources(settings.sources_file, include_inactive=True)
 
     if local:
+        chosen = choose_sources(seed, only)
         store = LocalStore(settings.data_dir)
         local_results = detect_changes(
             asyncio.run(fetch_all(chosen, settings)), store.last_hashes()
@@ -138,7 +140,8 @@ def run_fetch(settings: Settings, local: bool, only: str | None) -> list[FetchRe
 
     assert settings.database_url is not None
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
-        db.sync_sources(conn, all_sources)
+        db.sync_sources(conn, seed)
+        chosen = choose_sources(db.all_sources(conn, seed), only)
         run_id = db.start_run(conn, "fetch")
         results: list[FetchResult] = []
         try:
@@ -163,9 +166,10 @@ def run_extract(
     """Extract and validate the latest saved snapshot of one source. Saves nothing."""
     if not settings.database_url:
         raise SetupError("DATABASE_URL is not set: extract reads the latest snapshot from it")
-    [source] = choose_sources(load_sources(settings.sources_file, include_inactive=True), only)
+    seed = load_sources(settings.sources_file, include_inactive=True)
 
     with psycopg.connect(settings.database_url) as conn:
+        [source] = choose_sources(db.all_sources(conn, seed), only)
         snapshot = db.latest_snapshot(conn, source.key)
     if snapshot is None:
         raise SetupError(
@@ -226,12 +230,12 @@ def run_weekly(
     """Sync sources, run the graph for each chosen source, record the run, then match."""
     if not settings.database_url:
         raise SetupError("DATABASE_URL is not set: the weekly run saves to the database")
-    all_sources = load_sources(settings.sources_file, include_inactive=True)
-    chosen = choose_sources(all_sources, only)
+    seed = load_sources(settings.sources_file, include_inactive=True)
     provider = provider or build_provider(settings, provider_choice)
 
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
-        db.sync_sources(conn, all_sources)
+        db.sync_sources(conn, seed)
+        chosen = choose_sources(db.all_sources(conn, seed), only)
         run_id = db.start_run(conn, "weekly")
         try:
             outcomes = asyncio.run(
@@ -250,12 +254,21 @@ def run_weekly(
 # ---------- profile and match commands ----------
 
 
-def run_profile(settings: Settings) -> str:
-    """Save profile.yaml to the database. Returns a one-line confirmation."""
+def run_profile(settings: Settings, force: bool = False) -> str:
+    """Save profile.yaml to the database the first time. Returns a one-line confirmation.
+
+    Once a profile exists it is edited in the dashboard, so this refuses to overwrite it
+    unless `force` is set.
+    """
     profile = load_profile(settings.profile_file)
     if not settings.database_url:
         raise SetupError("DATABASE_URL is not set: the profile is saved to the database")
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        if not force and db.has_profile(conn):
+            raise SetupError(
+                "A profile is already saved: edit it in the dashboard instead "
+                "(or add --force to overwrite it with profile.yaml)"
+            )
         db.upsert_profile(conn, profile)
     return f"Saved profile for {profile.full_name} ({profile.email})"
 
@@ -463,7 +476,9 @@ def main(argv: list[str] | None = None) -> int:
     weekly.add_argument("--force", action="store_true", help="re-extract unchanged pages too")
     weekly.add_argument("--provider", choices=PROVIDER_CHOICES, default="auto",
                         help="LLM to use (auto = Gemini, then Groq if Gemini fails)")
-    commands.add_parser("profile", help="save profile.yaml to the profiles table")
+    profile = commands.add_parser("profile", help="save profile.yaml to the profiles table")
+    profile.add_argument("--force", action="store_true",
+                         help="overwrite the saved profile (normally edited in the dashboard)")
     commands.add_parser("match", help="match every profile against open scholarships")
     digest = commands.add_parser("digest", help="email the weekly digest to every profile")
     digest.add_argument("--dry-run", action="store_true",
@@ -488,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
             outcomes, matches = run_weekly(Settings(), only=args.only, force=args.force,
                                            provider_choice=args.provider)
         elif args.command == "profile":
-            print(run_profile(Settings()))
+            print(run_profile(Settings(), force=args.force))
             return 0
         elif args.command == "match":
             matches = run_match(Settings())

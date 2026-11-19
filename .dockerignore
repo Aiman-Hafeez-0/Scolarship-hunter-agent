@@ -1,0 +1,24 @@
+# Never put secrets or personal data in the image.
+.env
+.env.*
+!.env.example
+profile.yaml
+data/
+
+# Not needed to run the dashboard.
+.git/
+.github/
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/tests/
+db/
+digest-preview.html
+README.md
+CLAUDE.md
+.vscode/
+.idea/
