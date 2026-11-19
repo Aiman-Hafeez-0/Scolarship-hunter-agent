@@ -391,7 +391,8 @@ async def _weekly(conn: Conn, settings: Settings, provider: FakeProvider) -> Sou
     """What `pipeline.run weekly` does for one source (compares with last_extracted_hash)."""
     [outcome] = await run_sources(
         [make_source(key="a", url=WEEKLY_URL)], settings, provider, db.PostgresStore(conn),
-        db.last_extracted_hashes(conn), today=date(2026, 11, 15),
+        db.last_extracted_hashes(conn), db.last_extracted_versions(conn),
+        today=date(2026, 11, 15),
     )  # fmt: skip
     return outcome
 
@@ -449,6 +450,36 @@ async def test_failed_extraction_is_retried_next_run(
     assert len(provider.calls) == 1  # same page, but tried again
     assert second.saved == 1
     assert db.last_extracted_hashes(conn) == {"a": second.fetched.content_hash}
+
+
+async def test_new_model_re_extracts_unchanged_page(
+    conn: Conn, settings: Settings, weekly_site: respx.MockRouter
+) -> None:
+    _sync_example(conn, "a")
+    await _weekly(conn, settings, FakeProvider(_page_extraction(), name="old-model"))
+    assert db.last_extracted_versions(conn) == {"a": "extract_v3+old-model"}
+
+    same_model = FakeProvider(name="old-model")  # would fail if it were called
+    assert (await _weekly(conn, settings, same_model)).extracted is None
+
+    new_model = FakeProvider(_page_extraction(), name="new-model")
+    outcome = await _weekly(conn, settings, new_model)
+
+    assert outcome.fetched.change is Change.UNCHANGED
+    assert len(new_model.calls) == 1  # same page, but the model changed
+    assert db.last_extracted_versions(conn) == {"a": "extract_v3+new-model"}
+    assert _snapshot_count(conn, "a") == 1  # the page text is not stored twice
+
+
+def test_failed_extraction_keeps_old_version(conn: Conn) -> None:
+    _sync_example(conn, "a")
+    store = db.PostgresStore(conn)
+    first = make_result("a", PAGE, change=Change.NEW)
+    store.save(first, [_validated()], "extract_v3+good", mark_extracted=True)
+
+    store.save(first, [_validated()], "extract_v3+broken", mark_extracted=False)
+
+    assert db.last_extracted_versions(conn) == {"a": "extract_v3+good"}
 
 
 def test_weekly_run_totals_are_recorded(conn: Conn) -> None:

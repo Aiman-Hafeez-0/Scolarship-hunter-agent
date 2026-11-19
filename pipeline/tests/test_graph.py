@@ -7,8 +7,8 @@ import pytest
 import respx
 
 from pipeline.config import Settings
-from pipeline.graph import run_sources
-from pipeline.llm.provider import InvalidOutput, ProviderError
+from pipeline.graph import is_outdated, run_sources
+from pipeline.llm.provider import FallbackProvider, InvalidOutput, ProviderError
 from pipeline.models import Change, FetchResult, FetchStatus
 from pipeline.nodes.validate import ValidatedScholarship
 from pipeline.schemas import DeadlineItem, PageExtraction, ScholarshipExtraction
@@ -16,6 +16,7 @@ from pipeline.tests.conftest import FakeProvider, make_source
 from pipeline.text import content_hash, html_to_text, normalize
 
 TODAY = date(2026, 11, 15)
+CURRENT = {"good": "extract_v3+fake-model"}  # extracted with this prompt and model
 PAGE_HTML = (
     "<html><body><h1>MS Admissions</h1><p>Applications for the MS programme are open."
     " The deadline is 15 January 2027.</p></body></html>"
@@ -76,7 +77,7 @@ async def test_new_page_is_extracted_validated_and_saved(
     store, provider = FakeStore(), FakeProvider(page())
 
     [outcome] = await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
-                                  settings, provider, store, {}, today=TODAY)  # fmt: skip
+                                  settings, provider, store, {}, {}, today=TODAY)  # fmt: skip
 
     assert outcome.error is None
     assert outcome.fetched.change is Change.NEW
@@ -94,7 +95,7 @@ async def test_unchanged_page_ends_without_llm(site: respx.MockRouter, settings:
     old_hash = content_hash(normalize(html_to_text(PAGE_HTML)))
     store, provider = FakeStore(), FakeProvider()
 
-    [outcome] = await run_sources([good], settings, provider, store, {"good": old_hash})
+    [outcome] = await run_sources([good], settings, provider, store, {"good": old_hash}, CURRENT)
 
     assert outcome.fetched.change is Change.UNCHANGED
     assert outcome.extracted is None
@@ -108,12 +109,47 @@ async def test_force_extracts_unchanged_page(site: respx.MockRouter, settings: S
     store = FakeStore()
 
     [outcome] = await run_sources(
-        [good], settings, FakeProvider(page()), store, {"good": old_hash}, force=True, today=TODAY
+        [good], settings, FakeProvider(page()), store, {"good": old_hash}, CURRENT,
+        force=True, today=TODAY,
     )
 
     assert outcome.fetched.change is Change.UNCHANGED
     assert outcome.saved == 1
     assert "good" in store.saved
+
+
+@pytest.mark.parametrize(
+    "stored_version",
+    [None, "extract_v2+fake-model", "extract_v3+old-model"],
+    ids=["never-recorded", "old-prompt", "other-model"],
+)
+async def test_unchanged_page_with_outdated_version_is_extracted_again(
+    site: respx.MockRouter, settings: Settings, stored_version: str | None
+) -> None:
+    good = make_source(key="good", url="https://example.edu.pk/good")
+    old_hash = content_hash(normalize(html_to_text(PAGE_HTML)))
+    versions = {} if stored_version is None else {"good": stored_version}
+    store, provider = FakeStore(), FakeProvider(page())
+
+    [outcome] = await run_sources(
+        [good], settings, provider, store, {"good": old_hash}, versions, today=TODAY
+    )
+
+    assert outcome.fetched.change is Change.UNCHANGED  # the page itself did not change...
+    assert outcome.outdated is True  # ...but it was extracted with another prompt or model
+    assert len(provider.calls) == 1
+    assert store.saved["good"][1] == "extract_v3+fake-model"
+
+
+def test_any_model_of_the_provider_counts_as_current() -> None:
+    both = FallbackProvider(FakeProvider(name="gemini"), FakeProvider(name="groq"))
+
+    assert both.models == ("gemini", "groq")
+    assert not is_outdated("extract_v3+gemini", both)
+    assert not is_outdated("extract_v3+groq", both)  # fallback answer: no endless re-extracting
+    assert is_outdated("extract_v3+gemini-old", both)
+    assert is_outdated("extract_v2+gemini", both)
+    assert is_outdated(None, both)
 
 
 async def test_invalid_json_goes_back_to_extract_once(
@@ -123,7 +159,7 @@ async def test_invalid_json_goes_back_to_extract_once(
     store = FakeStore()
 
     [outcome] = await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
-                                  settings, provider, store, {}, today=TODAY)  # fmt: skip
+                                  settings, provider, store, {}, {}, today=TODAY)  # fmt: skip
 
     assert [feedback for _, feedback in provider.calls] == [None, "status: bad value"]
     assert outcome.saved == 1
@@ -139,7 +175,7 @@ async def test_invalid_json_twice_saves_nothing_and_retries_next_week(
     store = FakeStore()
 
     [outcome] = await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
-                                  settings, provider, store, {}, today=TODAY)  # fmt: skip
+                                  settings, provider, store, {}, {}, today=TODAY)  # fmt: skip
 
     assert len(provider.calls) == 2  # no third try
     items, _, mark_extracted = store.saved["good"]
@@ -154,7 +190,7 @@ async def test_invented_quote_is_flagged(site: respx.MockRouter, settings: Setti
     store = FakeStore()
 
     await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
-                      settings, provider, store, {}, today=TODAY)  # fmt: skip
+                      settings, provider, store, {}, {}, today=TODAY)  # fmt: skip
 
     [item] = store.saved["good"][0]
     assert item.needs_review
@@ -167,7 +203,7 @@ async def test_llm_failure_flags_items_and_forgets_hash(
     store = FakeStore()
 
     await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
-                      settings, FakeProvider(ProviderError("quota")), store, {})  # fmt: skip
+                      settings, FakeProvider(ProviderError("quota")), store, {}, {})  # fmt: skip
 
     assert store.saved["good"] == ([], "extract_v3+none", False)
 
@@ -180,7 +216,7 @@ async def test_one_broken_source_never_stops_the_others(
     store = FakeStore(fail_for="other")
     provider = FakeProvider(page(), page())
 
-    outcomes = await run_sources(sources, settings, provider, store, {}, today=TODAY)
+    outcomes = await run_sources(sources, settings, provider, store, {}, {}, today=TODAY)
 
     by_key = {o.source.key: o for o in outcomes}
     assert [o.source.key for o in outcomes] == ["good", "broken", "other"]
@@ -195,7 +231,7 @@ async def test_one_broken_source_never_stops_the_others(
 async def test_contact_email_is_required(settings: Settings) -> None:
     no_email = settings.model_copy(update={"contact_email": ""})
     with pytest.raises(ValueError, match="CONTACT_EMAIL"):
-        await run_sources([], no_email, FakeProvider(), FakeStore(), {})
+        await run_sources([], no_email, FakeProvider(), FakeStore(), {}, {})
 
 
 async def test_llm_calls_run_one_at_a_time(site: respx.MockRouter, settings: Settings) -> None:
@@ -205,6 +241,7 @@ async def test_llm_calls_run_one_at_a_time(site: respx.MockRouter, settings: Set
 
     class SlowProvider:
         name = last_model = "slow"
+        models: tuple[str, ...] = ("slow",)
 
         def __init__(self) -> None:
             self.running = 0
@@ -224,7 +261,7 @@ async def test_llm_calls_run_one_at_a_time(site: respx.MockRouter, settings: Set
     provider = SlowProvider()
     sources = [make_source(key="good"),
                make_source(key="other", url="https://example.edu.pk/other")]  # fmt: skip
-    await run_sources(sources, settings, provider, FakeStore(), {}, today=TODAY)
+    await run_sources(sources, settings, provider, FakeStore(), {}, {}, today=TODAY)
 
     assert settings.max_concurrency > 1
     assert provider.most_at_once == 1

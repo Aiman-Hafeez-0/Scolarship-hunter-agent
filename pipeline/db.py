@@ -73,6 +73,15 @@ def last_extracted_hashes(conn: Conn) -> dict[str, str]:
     return {str(key): str(last_hash) for key, last_hash in rows}
 
 
+def last_extracted_versions(conn: Conn) -> dict[str, str]:
+    """The prompt and model (e.g. 'extract_v3+gemini-3.8-flash') of the last extraction saved
+    without errors, for each source key (used by `weekly`: an old version is extracted again)."""
+    rows = conn.execute(
+        "select key, last_extracted_version from sources where last_extracted_version is not null"
+    )
+    return {str(key): str(version) for key, version in rows}
+
+
 STALE_RUN_AFTER = timedelta(hours=2)
 STALE_RUN_ERROR = "stopped before finishing"
 
@@ -471,17 +480,21 @@ class PostgresStore:
     ) -> int:
         """Snapshot and extraction of one source, in a single transaction.
 
-        mark_extracted=True (the extraction had no errors) also sets last_extracted_hash,
-        last of all: if anything before it fails, the whole transaction is undone and the
-        page is extracted again next run. With False, the old last_extracted_hash stays.
+        mark_extracted=True (the extraction had no errors) also sets last_extracted_hash and
+        last_extracted_version, last of all: if anything before it fails, the whole
+        transaction is undone and the page is extracted again next run. With False, the old
+        values stay.
         """
         with self._lock, self.conn.transaction():
             save_result(self.conn, result)
             saved = save_extraction(self.conn, result.source.key, items, extraction_version)
             if mark_extracted and result.content_hash is not None:
                 self.conn.execute(
-                    "update sources set last_extracted_hash = %s where key = %s",
-                    (result.content_hash, result.source.key),
+                    """
+                    update sources set last_extracted_hash = %s, last_extracted_version = %s
+                    where key = %s
+                    """,
+                    (result.content_hash, extraction_version, result.source.key),
                 )
             return saved
 

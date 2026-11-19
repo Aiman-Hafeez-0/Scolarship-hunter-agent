@@ -1,0 +1,39 @@
+{# Small pieces shared by several pages. #}
+
+{% macro days_badge(deadline, today) -%}
+  {%- set days = days_left(deadline, today) -%}
+  {%- set t = tone(days) -%}
+  <span class="inline-block rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap
+    {% if t == 'red' %}bg-red-100 text-red-800{% elif t == 'orange' %}bg-orange-100 text-orange-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+    {% if days == 0 %}today{% elif days == 1 %}1 day left{% else %}{{ days }} days left{% endif %}
+  </span>
+{%- endmacro %}
+
+{% macro match_badge(status) -%}
+  <span class="inline-block rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap
+    {% if status == 'eligible' %}bg-green-100 text-green-800{% elif status == 'maybe' %}bg-sky-100 text-sky-800{% elif status == 'not_eligible' %}bg-slate-200 text-slate-700{% else %}bg-white text-slate-500 border border-slate-200{% endif %}">
+    {{ (status or 'not_matched') | label }}
+  </span>
+{%- endmacro %}
+
+{% macro run_badge(status) -%}
+  <span class="inline-block rounded px-2 py-0.5 text-xs font-medium
+    {% if status == 'success' %}bg-green-100 text-green-800{% elif status == 'partial' %}bg-orange-100 text-orange-800{% elif status == 'failed' %}bg-red-100 text-red-800{% else %}bg-sky-100 text-sky-800{% endif %}">
+    {{ status }}
+  </span>
+{%- endmacro %}
+
+{% macro review_badge() -%}
+  <span class="inline-block rounded px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300">needs review</span>
+{%- endmacro %}
+
+{% macro unchecked_label() -%}
+  <span class="inline-block rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600 border border-slate-300">not checked yet</span>
+{%- endmacro %}
+
+{% macro quote_box(quote) -%}
+  <details class="mt-1 group">
+    <summary class="cursor-pointer text-xs text-indigo-700 hover:underline select-none">Show quote{% if quote.score is not none %} (match {{ quote.score }}%){% endif %}</summary>
+    <blockquote class="mt-1 border-l-4 border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-slate-800 italic">"{{ quote.text }}"</blockquote>
+  </details>
+{%- endmacro %}

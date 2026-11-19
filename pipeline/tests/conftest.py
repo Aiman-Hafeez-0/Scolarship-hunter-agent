@@ -102,6 +102,7 @@ class FakeProvider:
         self.todays: list[date | None] = []
         self.name = name
         self.last_model = name
+        self.models: tuple[str, ...] = (name,)
 
     def extract(
         self,

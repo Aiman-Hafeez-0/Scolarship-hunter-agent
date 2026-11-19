@@ -7,6 +7,8 @@
 - A page is "unchanged" when it matches the last page that was extracted and saved without
   errors (sources.last_extracted_hash). Such a page ends the run for that source, unless
   `force` is set. A page only fetched by `fetch`, or whose extraction failed, is extracted.
+- An unchanged page is still extracted when it is "outdated": the prompt version or model
+  that last extracted it (sources.last_extracted_version) is not one this run would use.
 - A page that could not be fetched (failed, blocked by robots.txt, needs a browser) ends too.
 - run_sources runs the graph for many sources, at most `max_concurrency` at a time.
   One broken source never stops the others: its error is recorded in its outcome.
@@ -64,6 +66,7 @@ class SourceState(TypedDict, total=False):
     attempts: int
     validated: list[ValidatedScholarship]
     saved: int
+    outdated: bool  # unchanged page, but extracted with an older prompt or another model
 
 
 @dataclass
@@ -75,6 +78,7 @@ class Deps:
     provider: LLMProvider
     store: Store
     extracted_hashes: Mapping[str, str]  # source key -> fingerprint of last extracted page
+    extracted_versions: Mapping[str, str]  # source key -> prompt+model of last extraction
     force: bool
     today: date
     limiter: DomainRateLimiter
@@ -92,12 +96,27 @@ class SourceOutcome:
     items: list[ValidatedScholarship] = field(default_factory=list)
     saved: int = 0
     error: str | None = None
+    outdated: bool = False
 
 
-def should_extract(result: FetchResult, force: bool) -> bool:
+def extraction_version(model: str | None) -> str:
+    """What we store about an extraction: prompt version + model, e.g. 'extract_v3+groq'."""
+    return f"{EXTRACT_VERSION}+{model or 'none'}"
+
+
+def is_outdated(version: str | None, provider: LLMProvider) -> bool:
+    """True if `version` was not made by the current prompt with one of the provider's models.
+
+    Any model of the provider counts as current, so a page that Groq extracted while Gemini
+    was down is not extracted again just because Gemini is back.
+    """
+    return version not in {extraction_version(model) for model in provider.models}
+
+
+def should_extract(result: FetchResult, force: bool, outdated: bool = False) -> bool:
     if result.status is not FetchStatus.OK or result.text is None:
         return False
-    return force or result.change is not Change.UNCHANGED
+    return force or outdated or result.change is not Change.UNCHANGED
 
 
 def build_graph(deps: Deps) -> Any:
@@ -111,12 +130,15 @@ def build_graph(deps: Deps) -> Any:
 
     async def detect_change(state: SourceState) -> SourceState:
         [result] = detect_changes([state["fetched"]], deps.extracted_hashes)
-        if not should_extract(result, deps.force):
+        version = deps.extracted_versions.get(result.source.key)
+        outdated = result.change is Change.UNCHANGED and is_outdated(version, deps.provider)
+        if not should_extract(result, deps.force, outdated):
             await asyncio.to_thread(deps.store.record_fetch, result)
-        return {"fetched": result}
+        return {"fetched": result, "outdated": outdated}
 
     def after_detect(state: SourceState) -> str:
-        return "extract" if should_extract(state["fetched"], deps.force) else END
+        extract = should_extract(state["fetched"], deps.force, state.get("outdated", False))
+        return "extract" if extract else END
 
     async def extract(state: SourceState) -> SourceState:
         text = state["fetched"].text
@@ -152,7 +174,7 @@ def build_graph(deps: Deps) -> Any:
         # Only a complete extraction marks the page as extracted. If the LLM failed on part
         # of the page, it is extracted again next run. What was found is still saved.
         mark_extracted = not extracted.errors and not extracted.invalid_parts
-        version = f"{EXTRACT_VERSION}+{extracted.model or 'none'}"
+        version = extraction_version(extracted.model)
         saved = await asyncio.to_thread(
             deps.store.save, state["fetched"], state["validated"], version, mark_extracted
         )
@@ -190,6 +212,7 @@ async def run_source(graph: Any, source: Source) -> SourceOutcome:
         extracted=state.get("extracted"),
         items=state.get("validated", []),
         saved=state.get("saved", 0),
+        outdated=state.get("outdated", False),
     )
 
 
@@ -199,6 +222,7 @@ async def run_sources(
     provider: LLMProvider,
     store: Store,
     extracted_hashes: Mapping[str, str],
+    extracted_versions: Mapping[str, str],
     force: bool = False,
     today: date | None = None,
 ) -> list[SourceOutcome]:
@@ -215,6 +239,7 @@ async def run_sources(
             provider=provider,
             store=store,
             extracted_hashes=extracted_hashes,
+            extracted_versions=extracted_versions,
             force=force,
             today=today or date.today(),
             limiter=limiter,

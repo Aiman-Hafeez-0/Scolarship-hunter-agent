@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_macros.html" import days_badge, match_badge, run_badge %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Home</h1>
+
+{% if s.run_overdue %}
+<div role="alert" class="mb-6 rounded border border-red-300 bg-red-50 text-red-800 px-4 py-3">
+  <strong>No successful weekly run in the last 8 days.</strong>
+  {% if s.last_good_run_at %}The last one finished {{ s.last_good_run_at | pkt }}.{% else %}There has never been one.{% endif %}
+  Deadlines below may be out of date. Check the <a href="/runs" class="underline">runs page</a>.
+</div>
+{% endif %}
+
+<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  {% for status, count in s.match_counts.items() %}
+  <a href="/scholarships?match={{ status }}" class="block bg-white rounded-lg border border-slate-200 p-4 hover:border-indigo-300">
+    <div class="text-3xl font-semibold">{{ count }}</div>
+    <div class="mt-1">{{ match_badge(status) }}</div>
+  </a>
+  {% endfor %}
+</section>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <section class="lg:col-span-2 bg-white rounded-lg border border-slate-200 p-4">
+    <h2 class="font-semibold mb-3">Next deadlines</h2>
+    {% if s.upcoming %}
+    <ul class="divide-y divide-slate-100">
+      {% for d in s.upcoming %}
+      <li class="py-3 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+        <div class="flex-1 min-w-0">
+          <a href="/scholarships/{{ d.scholarship_id }}" class="font-medium text-indigo-700 hover:underline">{{ d.scholarship_name }}</a>
+          <div class="text-sm text-slate-600">{{ d.label }}{% if d.is_estimated %} (estimated){% endif %}</div>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+          <span>{{ d.deadline_date | day }}</span>
+          {{ days_badge(d.deadline_date, today) }}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-slate-600 text-sm">No upcoming deadlines saved yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="bg-white rounded-lg border border-slate-200 p-4">
+    <h2 class="font-semibold mb-3">Last run</h2>
+    {% if s.last_run %}
+    <dl class="text-sm space-y-2">
+      <div class="flex justify-between gap-2"><dt class="text-slate-600">Kind</dt><dd>{{ s.last_run.kind }}</dd></div>
+      <div class="flex justify-between gap-2"><dt class="text-slate-600">Status</dt><dd>{{ run_badge(s.last_run.status) }}</dd></div>
+      <div class="flex justify-between gap-2"><dt class="text-slate-600">Started</dt><dd class="text-right">{{ s.last_run.started_at | pkt }}</dd></div>
+      <div class="flex justify-between gap-2"><dt class="text-slate-600">Finished</dt><dd class="text-right">{{ s.last_run.finished_at | pkt }}</dd></div>
+    </dl>
+    {% if s.last_run.error %}<p class="mt-2 text-sm text-red-700 break-words">{{ s.last_run.error }}</p>{% endif %}
+    {% else %}
+    <p class="text-slate-600 text-sm">No runs recorded yet.</p>
+    {% endif %}
+    <a href="/runs" class="mt-3 inline-block text-sm text-indigo-700 hover:underline">All runs</a>
+  </section>
+</div>
+{% endblock %}

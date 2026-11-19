@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     # a month's runs pass 80% of it. 0 turns that alert off.
     monthly_token_budget: int = Field(default=1_000_000, ge=0)
 
+    # Dashboard login. The hash comes from `uv run python -m app.hash_password`; the secret
+    # signs the login cookie (changing it logs everyone out).
+    dashboard_email: str = ""
+    dashboard_password_hash: str | None = Field(default=None, repr=False)
+    session_secret: str | None = Field(default=None, repr=False)
+
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")
     data_dir: Path = Path("data")

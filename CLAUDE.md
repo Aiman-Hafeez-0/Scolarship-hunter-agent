@@ -17,6 +17,7 @@ The owner is a beginner: explain what you do in simple words, keep code clean, t
 
 - `pipeline/` – agent code; `pipeline/nodes/` – graph steps; `pipeline/tests/` – tests.
 - `pipeline/config.py` – all settings (read from `.env`).
+- `app/` – the dashboard (FastAPI + Jinja2 + HTMX); `app/tests/` – its tests.
 - `db/migrations/` – SQL migrations. `data/` – local files, gitignored.
 
 ## Rules
@@ -42,6 +43,6 @@ The owner is a beginner: explain what you do in simple words, keep code clean, t
 - Before saying a task is done, run and pass:
   ```
   uv run ruff check .
-  uv run mypy pipeline
+  uv run mypy pipeline app
   uv run pytest
   ```

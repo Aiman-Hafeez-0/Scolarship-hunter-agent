@@ -89,6 +89,7 @@ class InvalidOutput(Exception):
 class LLMProvider(Protocol):
     name: str
     last_model: str  # the model that produced the most recent answer
+    models: tuple[str, ...]  # every model this provider may answer with
 
     def extract(
         self,
@@ -281,6 +282,7 @@ class BaseProvider(ABC):
     ) -> None:
         self.name = model
         self.last_model = model
+        self.models: tuple[str, ...] = (model,)
         self.available = True  # False once the daily quota is used up: not called again
         self.rate_limit_tries = settings.llm_max_tries  # calls per request after HTTP 429
         self._settings = settings
@@ -348,6 +350,7 @@ class FallbackProvider:
         self.secondary = secondary
         self.name = f"{primary.name} -> {secondary.name}"
         self.last_model = primary.name
+        self.models = primary.models + secondary.models
 
     def extract(
         self,

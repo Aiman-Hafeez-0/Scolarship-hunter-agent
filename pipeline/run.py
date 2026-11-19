@@ -236,7 +236,8 @@ def run_weekly(
         try:
             outcomes = asyncio.run(
                 run_sources(chosen, settings, provider, db.PostgresStore(conn),
-                            db.last_extracted_hashes(conn), force=force, today=today)
+                            db.last_extracted_hashes(conn), db.last_extracted_versions(conn),
+                            force=force, today=today)
             )  # fmt: skip
         except BaseException as exc:
             db.finish_run(conn, run_id, [], error=f"{type(exc).__name__}: {exc}")
@@ -394,6 +395,8 @@ def format_weekly_summary(outcomes: list[SourceOutcome]) -> str:
         tokens = o.extracted.tokens_in + o.extracted.tokens_out if o.extracted else 0
         errors = o.extracted.errors if o.extracted else []
         note = o.error or o.fetched.error or "; ".join(errors)
+        if not note and o.outdated and o.extracted:
+            note = "re-extracted: new prompt or model"
         rows.append([
             o.source.key,
             o.fetched.status.value,
