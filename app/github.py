@@ -1,7 +1,7 @@
 """Start the weekly workflow on GitHub Actions ("Run now" on the dashboard).
 
-It calls the workflow_dispatch API for .github/workflows/weekly.yml with GITHUB_TOKEN. The
-token only goes in the Authorization header: it is never put in a message, log or page.
+It calls the workflow_dispatch API for .github/workflows/weekly.yml with RUN_NOW_GITHUB_TOKEN.
+The token only goes in the Authorization header: it is never put in a message, log or page.
 """
 
 import re
@@ -29,10 +29,10 @@ def actions_url(repo: str) -> str:
 
 
 def setup_problem(settings: Settings) -> str | None:
-    if not settings.github_token:
-        return "GITHUB_TOKEN is not set in .env."
-    if not REPO_PATTERN.fullmatch(settings.github_repo):
-        return "GITHUB_REPO is missing or not in the form owner/name."
+    if not settings.run_now_github_token:
+        return "RUN_NOW_GITHUB_TOKEN is not set in .env."
+    if not REPO_PATTERN.fullmatch(settings.run_now_github_repo):
+        return "RUN_NOW_GITHUB_REPO is missing or not in the form owner/name."
     return None
 
 
@@ -46,7 +46,7 @@ def _explain(response: httpx.Response) -> str:
         401: "GitHub did not accept the token (wrong or expired).",
         403: "The token may not start workflows: it needs Actions: Read and write.",
         404: "Repository or weekly.yml not found, or the token cannot see this repository.",
-        422: "GitHub refused the request (check GITHUB_REF is a real branch).",
+        422: "GitHub refused the request (check RUN_NOW_GITHUB_REF is a real branch).",
     }
     hint = hints.get(response.status_code, "GitHub answered with an error.")
     return f"{hint} (HTTP {response.status_code}{': ' + detail if detail else ''})"
@@ -59,18 +59,20 @@ async def dispatch_weekly(
     problem = setup_problem(settings)
     if problem:
         return DispatchResult(False, problem, None)
-    url = f"{API}/repos/{settings.github_repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
+    repo = settings.run_now_github_repo
+    url = f"{API}/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
     headers = {
         "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {settings.github_token}",
+        "Authorization": f"Bearer {settings.run_now_github_token}",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "ScholarshipHunterDashboard/0.1",
     }
-    link = actions_url(settings.github_repo)
+    link = actions_url(repo)
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=TIMEOUT_S)
     try:
-        response = await client.post(url, headers=headers, json={"ref": settings.github_ref})
+        body = {"ref": settings.run_now_github_ref}
+        response = await client.post(url, headers=headers, json=body)
     except httpx.HTTPError as exc:
         return DispatchResult(False, f"Could not reach GitHub ({type(exc).__name__}).", link)
     finally:

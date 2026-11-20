@@ -25,10 +25,10 @@ services:
       - key: SESSION_SECRET
         sync: false
       # Fine-grained token, this repository only, "Actions: Read and write"
-      - key: GITHUB_TOKEN
+      - key: RUN_NOW_GITHUB_TOKEN
         sync: false
       # owner/name
-      - key: GITHUB_REPO
+      - key: RUN_NOW_GITHUB_REPO
         sync: false
       - key: CONTACT_EMAIL
         sync: false

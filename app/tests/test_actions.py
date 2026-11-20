@@ -3,6 +3,7 @@
 from typing import Any
 
 import httpx
+import pytest
 import respx
 from fastapi.testclient import TestClient
 
@@ -278,7 +279,20 @@ def test_profile_needs_csrf(logged_in: TestClient, store: FakeStore) -> None:
 
 # ---------- Run now ----------
 
-GITHUB = {"github_token": TOKEN, "github_repo": "owner/scholarship-hunter"}
+GITHUB = {"run_now_github_token": TOKEN, "run_now_github_repo": "owner/scholarship-hunter"}
+RUN_NOW_VARS = ("RUN_NOW_GITHUB_TOKEN", "RUN_NOW_GITHUB_REPO", "RUN_NOW_GITHUB_REF")
+
+
+@pytest.fixture(autouse=True)
+def _clean_run_now_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the Run now variables, so no test depends on the machine it runs on.
+
+    GitHub Actions also sets GITHUB_TOKEN and GITHUB_REF; they must not change any result.
+    """
+    for name in RUN_NOW_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "the-runners-own-token")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/not-ours")
 
 
 def test_run_now_starts_the_workflow(store: FakeStore, mock_http: respx.MockRouter) -> None:
@@ -325,19 +339,35 @@ def test_run_now_without_javascript_shows_the_runs_page(
 
 def test_run_now_needs_setup(logged_in: TestClient, mock_http: respx.MockRouter) -> None:
     page = logged_in.get("/runs").text
-    assert "GITHUB_TOKEN is not set" in page and 'action="/runs/dispatch"' not in page
+    assert "RUN_NOW_GITHUB_TOKEN is not set" in page and 'action="/runs/dispatch"' not in page
     response = logged_in.post("/runs/dispatch", headers=_htmx(logged_in, "/runs"))
-    assert "GITHUB_TOKEN is not set" in response.text
+    assert "RUN_NOW_GITHUB_TOKEN is not set" in response.text
     assert not mock_http.calls
 
 
 def test_run_now_rejects_a_strange_repo_name(
     store: FakeStore, mock_http: respx.MockRouter
 ) -> None:
-    with _client_with(store, github_token=TOKEN, github_repo="owner/repo/../../x") as client:
+    bad = {"run_now_github_token": TOKEN, "run_now_github_repo": "owner/repo/../../x"}
+    with _client_with(store, **bad) as client:
         response = client.post("/runs/dispatch", headers=_htmx(client, "/runs"))
     assert "owner/name" in response.text
     assert not mock_http.calls
+
+
+def test_run_now_reads_its_settings_from_the_environment(
+    store: FakeStore, mock_http: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RUN_NOW_GITHUB_TOKEN", TOKEN)
+    monkeypatch.setenv("RUN_NOW_GITHUB_REPO", "owner/scholarship-hunter")
+    monkeypatch.setenv("RUN_NOW_GITHUB_REF", "dev")
+    route = mock_http.post(DISPATCH_URL).respond(204)
+    with _client_with(store) as client:
+        response = client.post("/runs/dispatch", headers=_htmx(client, "/runs"))
+    assert "Started." in response.text
+    request = route.calls[0].request
+    assert request.headers["authorization"] == f"Bearer {TOKEN}"
+    assert request.content == b'{"ref":"dev"}'
 
 
 def test_run_now_needs_csrf(store: FakeStore, mock_http: respx.MockRouter) -> None:

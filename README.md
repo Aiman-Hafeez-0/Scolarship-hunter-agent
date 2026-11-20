@@ -48,7 +48,9 @@ checked, switch sources on or off, edit your profile and start a run.
    uv run python -m app.hash_password
    ```
 2. Put those two lines in `.env`, plus `DASHBOARD_EMAIL=` with your email. `DATABASE_URL` must
-   already be there. For the "Run now" button, also fill in `GITHUB_TOKEN` and `GITHUB_REPO`.
+   already be there. For the "Run now" button, also fill in `RUN_NOW_GITHUB_TOKEN` and
+   `RUN_NOW_GITHUB_REPO` (and `RUN_NOW_GITHUB_REF` if the branch is not `main`). They start with
+   `RUN_NOW_` so they never clash with the `GITHUB_*` variables GitHub Actions sets itself.
 3. Start it:
    ```
    uv run uvicorn app.main:app --reload
@@ -66,7 +68,8 @@ checked, switch sources on or off, edit your profile and start a run.
    - `DASHBOARD_EMAIL`, `DASHBOARD_PASSWORD_HASH`, `SESSION_SECRET`: your login (step 1 above).
      The hash may be pasted with or without its quotes.
    - `CONTACT_EMAIL`: your email (sent to websites when you add a source).
-   - `GITHUB_TOKEN`, `GITHUB_REPO`: for "Run now" (leave empty if you do not want it).
+   - `RUN_NOW_GITHUB_TOKEN`, `RUN_NOW_GITHUB_REPO`: for "Run now" (leave empty if you do not
+     want it).
 5. Click **Apply**. The first build takes a few minutes. When it says **Live**, open the
    `https://...onrender.com` address shown at the top of the service page.
 6. Later changes: every push to GitHub deploys again. Change a value under the service's

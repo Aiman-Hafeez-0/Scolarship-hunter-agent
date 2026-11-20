@@ -91,9 +91,11 @@ class Settings(BaseSettings):
 
     # The dashboard's "Run now" button starts .github/workflows/weekly.yml through the GitHub
     # API. Use a fine-grained token with only "Actions: write" on this one repository.
-    github_token: str | None = Field(default=None, repr=False)
-    github_repo: str = ""  # "owner/name"
-    github_ref: str = "main"  # the branch whose weekly.yml is run
+    # The RUN_NOW_ prefix matters: GitHub Actions sets its own GITHUB_TOKEN, GITHUB_REPOSITORY
+    # and GITHUB_REF on every runner, and those must never be read as our settings.
+    run_now_github_token: str | None = Field(default=None, repr=False)
+    run_now_github_repo: str = ""  # "owner/name"
+    run_now_github_ref: str = "main"  # the branch whose weekly.yml is run
 
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")
