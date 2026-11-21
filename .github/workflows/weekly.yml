@@ -63,11 +63,12 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
-        run: uv sync --locked --no-dev
+        run: uv sync --locked --no-dev --group pipeline
 
-      # Brings the database schema up to date. Safe every time: only new SQL files are applied.
+      # Brings the database schema up to date (also the dashboard's login_failures table).
+      # Safe every time: only new SQL files are applied.
       - name: Apply database migrations
-        run: uv run --no-dev python -m pipeline.migrate
+        run: uv run --no-dev --group pipeline python -m pipeline.migrate
 
       # Inputs go through env variables, never pasted straight into the shell command.
       # A scheduled run has no inputs, so they fall back to the defaults.
@@ -78,12 +79,12 @@ jobs:
         run: |
           args=(--provider "$PROVIDER")
           if [ "$FORCE" = "true" ]; then args+=(--force); fi
-          uv run --no-dev python -m pipeline.run weekly "${args[@]}" 2>&1 | tee weekly-summary.txt
+          uv run --no-dev --group pipeline python -m pipeline.run weekly "${args[@]}" 2>&1 | tee weekly-summary.txt
 
       # Runs even if the weekly step failed, so matches are fresh for what was saved.
       - name: Match profiles
         if: ${{ !cancelled() }}
-        run: uv run --no-dev python -m pipeline.run match 2>&1 | tee match-summary.txt
+        run: uv run --no-dev --group pipeline python -m pipeline.run match 2>&1 | tee match-summary.txt
 
       # Monday is checked in UTC; at 03:17 UTC it is the same day in Pakistan (08:17 PKT).
       - name: Decide whether to send the digest
@@ -102,7 +103,7 @@ jobs:
       # Runs even if the weekly step failed: the digest then shows what was saved before.
       - name: Send digest
         if: ${{ !cancelled() && steps.digest.outputs.send == 'true' }}
-        run: uv run --no-dev python -m pipeline.run digest 2>&1 | tee digest-summary.txt
+        run: uv run --no-dev --group pipeline python -m pipeline.run digest 2>&1 | tee digest-summary.txt
 
       - name: Upload summary
         if: ${{ !cancelled() }}

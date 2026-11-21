@@ -1,0 +1,26 @@
+{# A panel that slides in from the right, for side forms ("Add source").
+   It is a native <dialog>: Esc closes it and focus stays inside while it is open.
+   Open it with a link or button that has data-open-dialog="<id>". open=True shows it as the
+   page loads (e.g. a form that came back with errors), also without JavaScript. #}
+{% from "components/icons.html" import icon %}
+
+{% macro slide_over(id, title, description="", open=False) -%}
+<dialog id="{{ id }}" aria-labelledby="{{ id }}-title"{% if open %} open data-open-on-load{% endif %}
+        class="slide-over fixed inset-y-0 right-0 left-auto z-50 m-0 h-dvh max-h-none w-full max-w-md overflow-hidden border-l border-slate-200 bg-white p-0 text-slate-900 shadow-xl dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+  <div class="flex h-full flex-col">
+    <header class="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+      <div>
+        <h2 id="{{ id }}-title" class="text-section">{{ title }}</h2>
+        {%- if description %}<p class="mt-0.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ description }}</p>{% endif %}
+      </div>
+      <form method="dialog">
+        <button data-close-dialog aria-label="Close panel"
+                class="grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+          {{ icon("x", "size-5") }}
+        </button>
+      </form>
+    </header>
+    <div class="flex-1 overflow-y-auto px-5 py-5">{{ caller() }}</div>
+  </div>
+</dialog>
+{%- endmacro %}

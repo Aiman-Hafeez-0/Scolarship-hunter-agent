@@ -1,9 +1,17 @@
 {% extends "base.html" %}
-{% block title %}{{ title }} · Scholarship Hunter{% endblock %}
-{% block content %}
-<div class="max-w-lg mx-auto mt-10 bg-white rounded-lg border border-slate-200 p-6">
-  <h1 class="text-xl font-semibold mb-2">{{ title }}</h1>
-  <p class="text-slate-700">{{ message }}</p>
-  <p class="mt-4"><a href="/" class="text-indigo-700 hover:underline">Back to the home page</a></p>
+{% from "components/icons.html" import icon %}
+{% from "components/buttons.html" import link_button %}
+{% from "components/cards.html" import SURFACE %}
+{% set active = "" %}
+{% macro message_box() -%}
+<div class="{{ SURFACE }} mx-auto max-w-lg p-6 text-center sm:p-8">
+  <span class="mx-auto grid size-12 place-items-center rounded-full bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">{{ icon("triangle-alert", "size-6") }}</span>
+  <h2 class="mt-4 text-section text-slate-900 dark:text-white">{{ title }}</h2>
+  <p class="mt-2 text-body text-slate-700 dark:text-slate-300">{{ message }}</p>
+  <div class="mt-6 flex flex-wrap justify-center gap-2">
+    {{ link_button("Back to the overview", "/", "primary", "md", "arrow-right") }}
+  </div>
 </div>
-{% endblock %}
+{%- endmacro %}
+{% block content %}{{ message_box() }}{% endblock %}
+{% block bare %}<div class="px-4 py-16">{{ message_box() }}</div>{% endblock %}

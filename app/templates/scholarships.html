@@ -1,62 +1,46 @@
 {% extends "base.html" %}
-{% block title %}Scholarships · Scholarship Hunter{% endblock %}
-{% macro select(name, text, options, current) -%}
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">{{ text }}</span>
-    <select name="{{ name }}" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm">
-      <option value="">All</option>
-      {% for option in options %}
-      <option value="{{ option }}" {% if option == current %}selected{% endif %}>{{ option | label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-{%- endmacro %}
+{% from "components/icons.html" import icon %}
+{% from "components/buttons.html" import btn, spinner %}
+{% from "components/cards.html" import SURFACE %}
+{% from "components/forms.html" import INPUT, LABEL, select_field, checkbox %}
+{% set active = "opportunities" %}
+{% set title = "Opportunities" %}
 {% block content %}
-<div class="flex items-center gap-3 mb-4">
-  <h1 class="text-2xl font-semibold">Scholarships</h1>
-  <span id="loading" class="htmx-indicator items-center gap-2 text-sm text-slate-600" aria-live="polite">
-    <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"></circle>
-      <path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="4" class="opacity-75"></path>
-    </svg>
-    Loading…
-  </span>
-</div>
+<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">Every scholarship, admission and entry test the agent found on official pages, with your match.</p>
 
-{# Without JavaScript this is a normal GET form; with HTMX only the table is replaced. #}
+{#- Without JavaScript this is a normal GET form; with HTMX only the results are replaced. -#}
 <form id="filters" method="get" action="/scholarships"
       hx-get="/scholarships/table" hx-target="#results" hx-swap="innerHTML"
       hx-trigger="change, input changed delay:400ms from:#q, submit"
-      hx-indicator="#loading" hx-sync="this:replace"
-      class="bg-white rounded-lg border border-slate-200 p-4 mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-  <label class="block sm:col-span-2">
-    <span class="text-xs font-medium text-slate-600">Search name, provider or country</span>
-    <input id="q" name="q" type="search" value="{{ f.q }}" placeholder="e.g. Hungary"
-           class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm">
-  </label>
-  {{ select("type", "Type", types, f.opportunity_type) }}
-  {{ select("location", "Location", locations, f.location) }}
-  {{ select("match", "Match status", match_statuses, f.match) }}
-  {{ select("funding", "Funding", funding_types, f.funding) }}
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">Deadline on or before</span>
-    <input name="deadline_before" type="date" value="{{ f.deadline_before.isoformat() if f.deadline_before else '' }}"
-           class="mt-1 w-full rounded border border-slate-300 px-2 py-2 text-sm">
-  </label>
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">Sort by</span>
-    <select name="sort" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm">
-      <option value="deadline" {% if f.sort == 'deadline' %}selected{% endif %}>Next deadline</option>
-      <option value="score" {% if f.sort == 'score' %}selected{% endif %}>Match score</option>
+      hx-indicator="#results, #loading" hx-sync="this:replace"
+      class="{{ SURFACE }} mb-5 grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-4">
+  <div class="sm:col-span-2">
+    <label for="q" class="{{ LABEL }}">Search name, provider or country</label>
+    <div class="relative mt-1.5">
+      {{ icon("search", "pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500 dark:text-slate-400") }}
+      <input id="q" name="q" type="search" value="{{ f.q }}" placeholder="e.g. Hungary" class="{{ INPUT }} pl-9">
+    </div>
+  </div>
+  {{ select_field("type", "Type", types, f.opportunity_type) }}
+  {{ select_field("location", "Location", locations, f.location) }}
+  {{ select_field("match", "Match", match_statuses, f.match) }}
+  {{ select_field("funding", "Funding", funding_types, f.funding) }}
+  <div>
+    <label for="f-deadline_before" class="{{ LABEL }}">Deadline on or before</label>
+    <input id="f-deadline_before" name="deadline_before" type="date" value="{{ f.deadline_before.isoformat() if f.deadline_before else '' }}" class="mt-1.5 {{ INPUT }}">
+  </div>
+  <div>
+    <label for="f-sort" class="{{ LABEL }}">Sort by</label>
+    <select id="f-sort" name="sort" class="mt-1.5 {{ INPUT }}">
+      <option value="deadline"{% if f.sort == 'deadline' %} selected{% endif %}>Next deadline</option>
+      <option value="score"{% if f.sort == 'score' %} selected{% endif %}>Match score</option>
     </select>
-  </label>
-  <div class="flex items-end gap-4 sm:col-span-2 lg:col-span-4">
-    <label class="inline-flex items-center gap-2 text-sm">
-      <input type="checkbox" name="include_closed" value="1" {% if f.include_closed %}checked{% endif %}>
-      Show closed ones too
-    </label>
-    <noscript><button class="rounded bg-indigo-600 text-white px-3 py-1 text-sm">Apply</button></noscript>
-    <a href="/scholarships" class="text-sm text-indigo-700 hover:underline">Clear filters</a>
+  </div>
+  <div class="flex flex-wrap items-center gap-x-6 gap-y-3 sm:col-span-2 lg:col-span-4">
+    {{ checkbox("include_closed", "Show closed ones too", f.include_closed) }}
+    <noscript><button class="{{ btn('primary', 'sm') }}">Apply</button></noscript>
+    <a href="/scholarships" class="inline-flex items-center gap-1 rounded text-small font-semibold text-teal-700 hover:underline dark:text-teal-400">{{ icon("x", "size-3.5") }}Clear filters</a>
+    <span id="loading" class="htmx-indicator ml-auto items-center gap-2 text-small text-slate-600 dark:text-slate-400" aria-live="polite">{{ spinner() }}Loading…</span>
   </div>
 </form>
 

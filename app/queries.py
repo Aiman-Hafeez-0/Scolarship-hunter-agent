@@ -5,6 +5,7 @@ fake with the same methods. Filtering and sorting happen in Python (filter_rows)
 the list is small (tens of items) and that keeps them easy to test.
 """
 
+import math
 import uuid
 from collections import Counter
 from collections.abc import Mapping
@@ -14,7 +15,8 @@ from typing import Any, Literal, Protocol
 
 from psycopg import errors
 
-from pipeline.db import PROFILE_COLUMNS, Conn, upsert_profile
+from app import auth
+from pipeline.dbcore import PROFILE_COLUMNS, Conn, upsert_profile
 from pipeline.models import Source
 from pipeline.notify.store import PostgresNotifyStore
 from pipeline.profile import Profile
@@ -59,6 +61,19 @@ class UpcomingDeadline:
     label: str
     deadline_date: date
     is_estimated: bool
+    opportunity_type: str = "scholarship"
+
+
+@dataclass
+class RecentChange:
+    """One change seen on a page, for the "Recently changed" list."""
+
+    scholarship_id: str
+    scholarship_name: str
+    field_path: str
+    old_value: Any
+    new_value: Any
+    detected_at: datetime
 
 
 @dataclass
@@ -178,6 +193,7 @@ class DashboardStore(Protocol):
     def profile_id(self, email: str) -> str | None: ...
     def scholarship_rows(self, profile_id: str | None, today: date) -> list[ScholarshipRow]: ...
     def upcoming_deadlines(self, today: date, limit: int) -> list[UpcomingDeadline]: ...
+    def recent_changes(self, limit: int) -> list[RecentChange]: ...
     def scholarship(
         self, profile_id: str | None, scholarship_id: str
     ) -> ScholarshipDetail | None: ...
@@ -279,17 +295,6 @@ def match_counts(rows: list[ScholarshipRow]) -> dict[str, int]:
     """How many open items have each match status (closed ones are left out)."""
     counts = Counter(row.match_status or NOT_MATCHED for row in rows if row.status != "closed")
     return {status: counts.get(status, 0) for status in (*MATCH_STATUSES, NOT_MATCHED)}
-
-
-def days_left(deadline: date, today: date) -> int:
-    return (deadline - today).days
-
-
-def deadline_tone(days: int) -> Literal["red", "orange", "gray"]:
-    """Red at 7 days or less, orange at 30 or less."""
-    if days <= 7:
-        return "red"
-    return "orange" if days <= 30 else "gray"
 
 
 # ---------- Detail fields ----------
@@ -398,7 +403,7 @@ class PostgresDashboardStore:
     def upcoming_deadlines(self, today: date, limit: int) -> list[UpcomingDeadline]:
         rows = self.conn.execute(
             """
-            select s.id, s.name, d.label, d.deadline_date, d.is_estimated
+            select s.id, s.name, d.label, d.deadline_date, d.is_estimated, s.opportunity_type
             from deadlines d join scholarships s on s.id = d.scholarship_id
             where d.deadline_date >= %s and s.status <> 'closed'
             order by d.deadline_date, s.name, d.label
@@ -406,7 +411,21 @@ class PostgresDashboardStore:
             """,
             (today, limit),
         ).fetchall()
-        return [UpcomingDeadline(str(r[0]), str(r[1]), str(r[2]), r[3], bool(r[4])) for r in rows]
+        return [UpcomingDeadline(str(r[0]), str(r[1]), str(r[2]), r[3], bool(r[4]), str(r[5]))
+                for r in rows]  # fmt: skip
+
+    def recent_changes(self, limit: int) -> list[RecentChange]:
+        """The newest changes seen on any page, newest first."""
+        rows = self.conn.execute(
+            """
+            select s.id, s.name, c.field_path, c.old_value, c.new_value, c.detected_at
+            from changes c join scholarships s on s.id = c.scholarship_id
+            order by c.detected_at desc, s.name, c.field_path
+            limit %s
+            """,
+            (limit,),
+        ).fetchall()
+        return [RecentChange(str(r[0]), str(r[1]), str(r[2]), r[3], r[4], r[5]) for r in rows]
 
     def scholarship(self, profile_id: str | None, scholarship_id: str) -> ScholarshipDetail | None:
         try:
@@ -596,3 +615,48 @@ def _source_row(r: Any) -> SourceRow:
         consecutive_failures=int(r[8]), last_error=r[9], robots_allowed=r[10],
         robots_checked_at=r[11], note=r[12],
     )  # fmt: skip
+
+
+class PostgresLoginLimiter:
+    """The login rate limit (auth.LoginLimiter), with one row per failed login in the
+    login_failures table, so every server instance sees the same count."""
+
+    def __init__(
+        self,
+        conn: Conn,
+        max_failures: int = auth.MAX_LOGIN_FAILURES,
+        window_s: float = auth.LOGIN_WINDOW_S,
+    ) -> None:
+        self.conn = conn
+        self.max_failures = max_failures
+        self.window_s = float(window_s)
+
+    def retry_after_s(self, key: str) -> int:
+        # The max_failures-th newest failure in the window: once it is older than the window,
+        # fewer than max_failures are left and the next try is allowed.
+        row = self.conn.execute(
+            """
+            select extract(epoch from failed_at + make_interval(secs => %(window)s) - now())
+            from login_failures
+            where client_key = %(key)s and failed_at > now() - make_interval(secs => %(window)s)
+            order by failed_at desc
+            offset %(skip)s limit 1
+            """,
+            {"key": key, "window": self.window_s, "skip": self.max_failures - 1},
+        ).fetchone()
+        return 0 if row is None else max(1, math.ceil(float(row[0])))
+
+    def blocked(self, key: str) -> bool:
+        return self.retry_after_s(key) > 0
+
+    def record_failure(self, key: str) -> None:
+        with self.conn.transaction():
+            self.conn.execute("insert into login_failures (client_key) values (%s)", (key,))
+            # Housekeeping: rows outside the window no longer count for anyone.
+            self.conn.execute(
+                "delete from login_failures where failed_at <= now() - make_interval(secs => %s)",
+                (self.window_s,),
+            )
+
+    def reset(self, key: str) -> None:
+        self.conn.execute("delete from login_failures where client_key = %s", (key,))

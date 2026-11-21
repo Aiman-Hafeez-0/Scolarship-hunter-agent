@@ -1,0 +1,27 @@
+{# A toast: a short message in the bottom-right corner. Success and info close by themselves
+   after 6 seconds (app.js); errors stay until you close them. #}
+{% from "components/icons.html" import icon %}
+
+{% set KINDS = {
+  "success": ("circle-check", "text-green-700 dark:text-green-300"),
+  "error": ("circle-x", "text-red-700 dark:text-red-300"),
+  "info": ("info", "text-teal-700 dark:text-teal-400"),
+} %}
+
+{% macro toast(message, kind="success", link_text=None, link_href=None) -%}
+{%- set ic, ic_cls = KINDS[kind] -%}
+<div class="toast toast-enter pointer-events-auto flex w-full max-w-sm gap-3 rounded-xl border border-slate-200 bg-white p-4 text-body text-slate-800 shadow-xl dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+     role="{{ 'alert' if kind == 'error' else 'status' }}" data-kind="{{ kind }}" data-autoclose="{{ 'false' if kind == 'error' else 'true' }}">
+  {{ icon(ic, "mt-0.5 size-5 " ~ ic_cls) }}
+  <div class="min-w-0 flex-1 break-words">
+    <span data-toast-text>{{ message }}</span>
+    {%- if link_href %}
+    <a href="{{ link_href }}" target="_blank" rel="noopener noreferrer" class="mt-1 flex items-center gap-1 text-small font-semibold text-teal-700 hover:underline dark:text-teal-400">{{ link_text }}{{ icon("external-link", "size-3.5") }}</a>
+    {%- endif %}
+  </div>
+  <button type="button" data-dismiss-toast aria-label="Close message"
+          class="-m-1 grid size-7 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+    {{ icon("x", "size-4") }}
+  </button>
+</div>
+{%- endmacro %}

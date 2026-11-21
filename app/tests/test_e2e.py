@@ -1,8 +1,8 @@
 """End-to-end test in a real browser (Playwright): log in, list, detail, verify.
 
-Skipped unless E2E=1, because it needs Chromium and internet access (HTMX and Tailwind
-come from a CDN). The app runs in a background thread with the fake store, so no database
-is needed. How to run it is in the README ("End-to-end test").
+Skipped unless E2E=1, because it needs Chromium (and internet access for the Manrope font;
+htmx and the CSS are served by the app itself). The app runs in a background thread with
+the fake store, so no database is needed. How to run it is in the README ("End-to-end test").
 """
 
 import os
@@ -15,7 +15,15 @@ import pytest
 import uvicorn
 
 from app.main import create_app, get_store, get_today
-from app.tests.conftest import EMAIL, PASSWORD, SID, TODAY, FakeStore, make_settings
+from app.tests.conftest import (
+    EMAIL,
+    PASSWORD,
+    SID,
+    TODAY,
+    FakeStore,
+    make_settings,
+    use_fake_limiter,
+)
 
 pytestmark = pytest.mark.skipif(os.environ.get("E2E") != "1", reason="set E2E=1 to run it")
 
@@ -31,6 +39,7 @@ def live_server(store: FakeStore) -> Iterator[str]:
     """The dashboard on http://127.0.0.1:<free port> (127.0.0.1: cookies work over http)."""
     app = create_app(make_settings())
     app.dependency_overrides[get_store] = lambda: store
+    use_fake_limiter(app)
     app.dependency_overrides[get_today] = lambda: TODAY
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
@@ -57,7 +66,7 @@ def test_log_in_open_list_and_detail_then_verify(live_server: str, store: FakeSt
         page.goto(live_server + "/scholarships")
         expect(page).to_have_url(f"{live_server}/login?next=%2Fscholarships")
         page.get_by_label("Email").fill(EMAIL)
-        page.get_by_label("Password").fill(PASSWORD)
+        page.get_by_label("Password", exact=True).fill(PASSWORD)  # not "Show password"
         page.get_by_role("button", name="Log in").click()
 
         # The list (it was the page we asked for).

@@ -1,0 +1,33 @@
+{# Tables: a card holding a table that scrolls sideways if it must. On phones pages show a
+   card list instead (the table is hidden under 640 px). #}
+
+{% macro table(label) -%}
+<div class="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs sm:block dark:border-slate-800 dark:bg-slate-900">
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-body">
+      <caption class="sr-only">{{ label }}</caption>
+      {{- caller() -}}
+    </table>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro thead() -%}
+<thead class="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40">
+  <tr>{{ caller() }}</tr>
+</thead>
+{%- endmacro %}
+
+{% macro th(text, align="left") -%}
+<th scope="col" class="px-4 py-2.5 text-small uppercase tracking-wide whitespace-nowrap text-slate-600 dark:text-slate-400{% if align == 'right' %} text-right{% endif %}">{{ text }}</th>
+{%- endmacro %}
+
+{# Classes for the body and its rows. A row with data-href opens that page when clicked. #}
+{% set TBODY = "divide-y divide-slate-100 dark:divide-slate-800" %}
+{% set ROW = "align-top transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50" %}
+{% set CLICKABLE = "cursor-pointer" %}
+{% set TD = "px-4 py-3" %}
+
+{# The phone version: one card per row. #}
+{% set MOBILE_LIST = "space-y-3 sm:hidden" %}
+{% set MOBILE_CARD = "block rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900" %}

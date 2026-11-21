@@ -1,75 +1,69 @@
 {% extends "base.html" %}
-{% block title %}Profile · Scholarship Hunter{% endblock %}
-{% macro field(name, text, type="text", help="", step="") -%}
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">{{ text }}</span>
-    <input name="{{ name }}" type="{{ type }}" value="{{ values.get(name, '') }}" {% if step %}step="{{ step }}"{% endif %}
-           class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm">
-    {% if help %}<span class="text-xs text-slate-500">{{ help }}</span>{% endif %}
-  </label>
-{%- endmacro %}
-{% macro checkbox(name, text) -%}
-  <label class="inline-flex items-center gap-2 text-sm">
-    <input type="checkbox" name="{{ name }}" value="1" {% if values.get(name) %}checked{% endif %}> {{ text }}
-  </label>
-{%- endmacro %}
+{% from "components/icons.html" import icon %}
+{% from "components/buttons.html" import btn %}
+{% from "components/cards.html" import card, callout %}
+{% from "components/forms.html" import text_field, checkbox, textarea, form_errors %}
+{% from "components/toast.html" import toast %}
+{% set active = "profile" %}
+{% set title = "Profile" %}
+{% set fe = field_errors(errors) %}
+{% block toasts %}{% if saved %}{{ toast("Saved. New scores appear after the next run.", "success") }}{% endif %}{% endblock %}
 {% block content %}
-<h1 class="text-2xl font-semibold mb-2">Profile</h1>
-<p class="mb-4 text-sm text-slate-600">
-  Matching uses these facts. New scores appear after the next run (or <code>uv run python -m pipeline.run match</code>).
-  This page is where the profile is kept: <code>pipeline.run profile</code> only creates it the first time.
+<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">
+  Matching uses these facts; they never leave this dashboard and are never sent to an LLM.
+  New scores appear after the next run (or <code class="text-small">uv run python -m pipeline.run match</code>).
 </p>
 
-{% if saved %}<p role="status" class="mb-4 rounded border border-green-300 bg-green-50 px-4 py-2 text-sm text-green-900">Saved.</p>{% endif %}
-{% if is_new %}<p class="mb-4 rounded border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">No profile yet: saving creates it.</p>{% endif %}
-{% if errors %}
-<ul role="alert" class="mb-4 rounded border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 list-disc list-inside">
-  {% for error in errors %}<li>{{ error }}</li>{% endfor %}
-</ul>
-{% endif %}
+{%- if is_new %}
+{% call callout("warning", cls="mb-5") %}<p>No profile yet: saving creates it.</p>{% endcall %}
+{%- endif %}
+{%- if errors %}<div class="mb-5">{{ form_errors(errors) }}</div>{% endif %}
 
 <form method="post" action="/profile" class="space-y-6">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-  <section class="bg-white rounded-lg border border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-    <h2 class="font-semibold sm:col-span-2">About you</h2>
-    {{ field("full_name", "Full name") }}
-    {{ field("email", "Email (digests and reminders go here)", "email") }}
-    {{ field("nationality", "Nationality", help="PK for Pakistan") }}
-    {{ field("date_of_birth", "Date of birth", "date", "Used for age limits") }}
-  </section>
-
-  <section class="bg-white rounded-lg border border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-    <h2 class="font-semibold sm:col-span-2">Studies and English</h2>
-    {{ field("degree", "Degree you have", help="e.g. BS Computer Science") }}
-    {{ field("target_intake", "Target intake", help="e.g. Fall 2027") }}
-    {{ field("cgpa", "CGPA", "number", step="0.01") }}
-    {{ field("cgpa_scale", "CGPA scale", "number", step="0.01") }}
-    {{ field("english_test", "English test", help="IELTS, TOEFL, PTE or Duolingo; blank if none") }}
-    {{ field("english_score", "English score") }}
-    {{ field("work_experience_months", "Work experience (months)", "number") }}
-    <div class="self-end">{{ checkbox("moi_letter", "I have a Medium of Instruction (English) letter") }}</div>
-    <label class="block sm:col-span-2">
-      <span class="text-xs font-medium text-slate-600">Target fields (one per line)</span>
-      <textarea name="target_fields" rows="4" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm">{{ values.get('target_fields', '') }}</textarea>
-    </label>
-  </section>
-
-  <section class="bg-white rounded-lg border border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-    <h2 class="font-semibold sm:col-span-2">Money</h2>
-    {{ field("max_application_fee_eur", "Highest application fee (EUR)", "number", "Blank = no limit", "0.01") }}
-    <div class="flex flex-col gap-2 self-end">
-      {{ checkbox("prefer_no_fee", "Prefer programmes with no fee") }}
-      {{ checkbox("fully_funded_only", "Fully funded only") }}
+  {% call card("About you") %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {{ text_field("full_name", "Full name", values.get("full_name", ""), error=fe.get("full_name"), autocomplete="name") }}
+      {{ text_field("email", "Email", values.get("email", ""), "email", "Digests and reminders go here.", fe.get("email"), autocomplete="email") }}
+      {{ text_field("nationality", "Nationality", values.get("nationality", ""), help="PK for Pakistan.", error=fe.get("nationality")) }}
+      {{ text_field("date_of_birth", "Date of birth", values.get("date_of_birth", ""), "date", "Used for age limits.", fe.get("date_of_birth")) }}
     </div>
-  </section>
+  {% endcall %}
 
-  <section class="bg-white rounded-lg border border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-    <h2 class="font-semibold sm:col-span-2">Emails</h2>
-    {{ field("reminder_days", "Reminder days before a deadline", help="e.g. 30, 14, 7, 2") }}
-    <div class="self-end">{{ checkbox("emails_paused", "Pause all emails (digest and reminders)") }}</div>
-  </section>
+  {% call card("Studies and English") %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {{ text_field("degree", "Degree you have", values.get("degree", ""), help="e.g. BS Computer Science", error=fe.get("degree")) }}
+      {{ text_field("target_intake", "Target intake", values.get("target_intake", ""), help="e.g. Fall 2027", error=fe.get("target_intake")) }}
+      {{ text_field("cgpa", "CGPA", values.get("cgpa", ""), "number", error=fe.get("cgpa"), step="0.01") }}
+      {{ text_field("cgpa_scale", "CGPA scale", values.get("cgpa_scale", ""), "number", "Usually 4.0.", fe.get("cgpa_scale"), step="0.01") }}
+      {{ text_field("english_test", "English test", values.get("english_test", ""), help="IELTS, TOEFL, PTE or Duolingo; blank if none.", error=fe.get("english_test")) }}
+      {{ text_field("english_score", "English score", values.get("english_score", ""), error=fe.get("english_score")) }}
+      {{ text_field("work_experience_months", "Work experience (months)", values.get("work_experience_months", ""), "number", error=fe.get("work_experience_months")) }}
+      {{ checkbox("moi_letter", "I have a Medium of Instruction (English) letter", values.get("moi_letter"), cls="sm:self-end sm:pb-2") }}
+      {{ textarea("target_fields", "Target fields", values.get("target_fields", ""), 4, "One per line, e.g. Artificial Intelligence.", fe.get("target_fields"), cls="sm:col-span-2") }}
+    </div>
+  {% endcall %}
 
-  <button class="rounded bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700">Save profile</button>
+  {% call card("Money") %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {{ text_field("max_application_fee_eur", "Highest application fee (EUR)", values.get("max_application_fee_eur", ""), "number", "Blank = no limit.", fe.get("max_application_fee_eur"), step="0.01") }}
+      <div class="space-y-3 sm:pt-7">
+        {{ checkbox("prefer_no_fee", "Prefer programmes with no fee", values.get("prefer_no_fee")) }}
+        {{ checkbox("fully_funded_only", "Fully funded only", values.get("fully_funded_only")) }}
+      </div>
+    </div>
+  {% endcall %}
+
+  {% call card("Emails") %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {{ text_field("reminder_days", "Reminder days before a deadline", values.get("reminder_days", ""), help="e.g. 30, 14, 7, 2", error=fe.get("reminder_days")) }}
+      {{ checkbox("emails_paused", "Pause all emails (digest and reminders)", values.get("emails_paused"), cls="sm:pt-7") }}
+    </div>
+  {% endcall %}
+
+  <div class="flex justify-end">
+    <button class="{{ btn('primary', 'md') }} w-full sm:w-auto">{{ icon("check", "size-4") }}Save profile</button>
+  </div>
 </form>
 {% endblock %}

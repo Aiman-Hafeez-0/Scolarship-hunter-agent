@@ -11,18 +11,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-import psycopg
-from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from pipeline.config import mask_secrets
+from pipeline.dbcore import PROFILE_COLUMNS as PROFILE_COLUMNS  # re-exported
+from pipeline.dbcore import Conn as Conn
+from pipeline.dbcore import upsert_profile as upsert_profile
 from pipeline.matching.rules import RequirementFact, ScholarshipFacts
 from pipeline.models import Change, FetchResult, FetchStatus, Source
 from pipeline.nodes.validate import ValidatedScholarship
 from pipeline.profile import Profile
 from pipeline.schemas import ScholarshipExtraction
-
-Conn = psycopg.Connection[TupleRow]
 
 UPSERT_SOURCE = """
 insert into sources (key, url, name, program_key, country, type, opportunity_type,
@@ -534,28 +533,6 @@ class PostgresStore:
 
 
 # ---------- Profiles and matches ----------
-
-PROFILE_COLUMNS = [
-    "full_name", "email", "nationality", "date_of_birth", "degree", "cgpa", "cgpa_scale",
-    "english_test", "english_score", "moi_letter", "work_experience_months", "target_fields",
-    "target_intake", "max_application_fee_eur", "prefer_no_fee", "fully_funded_only",
-    "reminder_days",
-]  # fmt: skip
-
-
-def upsert_profile(conn: Conn, profile: Profile) -> uuid.UUID:
-    """Insert the profile, or update the one with the same email. Returns its id."""
-    columns = ", ".join(PROFILE_COLUMNS)
-    values = ", ".join(f"%({c})s" for c in PROFILE_COLUMNS)
-    updates = ", ".join(f"{c} = excluded.{c}" for c in PROFILE_COLUMNS if c != "email")
-    with conn.transaction():
-        row = conn.execute(
-            f"insert into profiles ({columns}) values ({values}) "
-            f"on conflict (email) do update set {updates} returning id",
-            profile.model_dump(),
-        ).fetchone()
-    assert row is not None
-    return uuid.UUID(str(row[0]))
 
 
 def has_profile(conn: Conn) -> bool:

@@ -1,0 +1,23 @@
+# Files Vercel never uploads or deploys (same pattern style as .gitignore).
+
+# Secrets and personal data: never leave your computer, even with `vercel deploy`.
+.env
+.env.*
+!.env.example
+profile.yaml
+
+# Tests and test data (pipeline/tests/golden/ holds saved pages: big and not needed).
+**/tests/
+pipeline/tests/golden/
+
+# Local files and virtual environments.
+data/
+.venv/
+venv/
+
+# Caches.
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

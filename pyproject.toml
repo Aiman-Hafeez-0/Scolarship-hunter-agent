@@ -4,28 +4,27 @@ version = "0.1.0"
 description = "Personal AI agent that tracks scholarship, admission and entry-test deadlines."
 readme = "README.md"
 requires-python = ">=3.12"
+# What the dashboard (app/) needs. Vercel and the Docker image install only these.
 dependencies = [
     "argon2-cffi>=25.1.0",
     "fastapi>=0.165.0",
-    "google-genai>=3.3.0",
-    "groq>=1.7.0",
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
     "jinja2>=3.1.6",
-    "langgraph>=1.2.22",
     "psycopg[binary]>=3.3.9",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.3",
-    "pypdf>=7.1.0",
     "python-multipart>=0.0.34",
     "pyyaml>=6.0.3",
-    "rapidfuzz>=3.14.6",
-    "trafilatura>=2.3.1",
     "uvicorn>=0.54.0",
 ]
 
 [tool.uv]
 package = false
+
+# Vercel: the FastAPI app it serves (see vercel.json and "Deploy on Vercel" in the README).
+[tool.vercel]
+entrypoint = "app.main:app"
 
 [tool.ruff]
 line-length = 100
@@ -45,7 +44,20 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["pipeline/tests", "app/tests"]
 
 [dependency-groups]
+# The weekly pipeline's heavy libraries. The dashboard must never import them (that keeps the
+# Vercel function small; app/tests/test_light_imports.py checks it). The workflows install
+# them with `uv sync --no-dev --group pipeline`.
+pipeline = [
+    "google-genai>=3.3.0",
+    "groq>=1.7.0",
+    "langgraph>=1.2.22",
+    "pypdf>=7.1.0",
+    "rapidfuzz>=3.14.6",
+    "trafilatura>=2.3.1",
+]
+# Installed by a plain `uv sync` (your computer and CI): the pipeline group plus test tools.
 dev = [
+    { include-group = "pipeline" },
     "fpdf2>=2.9.0",
     "mypy>=2.4.1",
     "pytest>=9.2.0",

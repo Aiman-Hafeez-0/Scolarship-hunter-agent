@@ -7,9 +7,9 @@ from psycopg.types.json import Jsonb
 from app.queries import (
     Filters,
     PostgresDashboardStore,
+    PostgresLoginLimiter,
     Quote,
     build_fields,
-    deadline_tone,
     filter_rows,
     match_counts,
     parse_filters,
@@ -46,12 +46,6 @@ def test_match_counts_skip_closed() -> None:
     rows = [row(match_status="eligible"), row(match_status=None),
             row(match_status="eligible", status="closed")]  # fmt: skip
     assert match_counts(rows) == {"eligible": 1, "maybe": 0, "not_eligible": 0, "not_matched": 1}
-
-
-def test_deadline_tone() -> None:
-    assert [deadline_tone(d) for d in (0, 7, 8, 30, 31)] == [
-        "red", "red", "orange", "orange", "gray"
-    ]  # fmt: skip
 
 
 def test_build_fields_attaches_quotes() -> None:
@@ -119,7 +113,12 @@ def test_postgres_store_reads_everything(conn: Conn) -> None:
     assert store.scholarship_rows(None, TODAY)[0].match_status is None
 
     [upcoming] = store.upcoming_deadlines(TODAY, 5)
-    assert upcoming.label == "Apply"
+    assert (upcoming.label, upcoming.opportunity_type) == ("Apply", "scholarship")
+
+    [change] = store.recent_changes(5)
+    assert (change.scholarship_name, change.field_path) == ("Stipendium Hungaricum", "status")
+    assert (change.old_value, change.new_value) == ("upcoming", "open")
+    assert change.detected_at is not None
 
     detail = store.scholarship(profile_id, sid)
     assert detail is not None
@@ -176,3 +175,30 @@ def test_postgres_store_actions(conn: Conn) -> None:
         pass
     else:
         raise AssertionError("expected ProfileEmailTaken")
+
+
+def test_postgres_login_limiter(conn: Conn) -> None:
+    limiter = PostgresLoginLimiter(conn)
+    for _ in range(4):
+        limiter.record_failure("1.2.3.4")
+    assert not limiter.blocked("1.2.3.4")
+    assert limiter.retry_after_s("1.2.3.4") == 0
+
+    limiter.record_failure("1.2.3.4")
+    assert limiter.blocked("1.2.3.4")
+    assert 0 < limiter.retry_after_s("1.2.3.4") <= 15 * 60
+    assert not limiter.blocked("5.6.7.8")  # another address is not affected
+
+    # The oldest failure is now 16 minutes old: only 4 are left inside the window.
+    conn.execute(
+        "update login_failures set failed_at = now() - interval '16 minutes' where id = "
+        "(select min(id) from login_failures where client_key = '1.2.3.4')"
+    )
+    assert not limiter.blocked("1.2.3.4")
+
+    limiter.record_failure("5.6.7.8")  # recording also deletes rows outside the window
+    left = conn.execute("select count(*) from login_failures where client_key = '1.2.3.4'")
+    assert left.fetchone() == (4,)
+
+    limiter.reset("1.2.3.4")
+    assert conn.execute("select count(*) from login_failures").fetchone() == (1,)

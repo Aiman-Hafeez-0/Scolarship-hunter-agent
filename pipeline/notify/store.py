@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from psycopg import errors
 
-from pipeline.db import Conn
+from pipeline.dbcore import Conn
 
 DEFAULT_REMINDER_DAYS = [30, 14, 7, 2]
 

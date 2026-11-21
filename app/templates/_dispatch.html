@@ -1,4 +1,2 @@
-<p role="status" class="rounded border px-3 py-2 text-sm {% if r.ok %}border-green-300 bg-green-50 text-green-900{% else %}border-red-300 bg-red-50 text-red-800{% endif %}">
-  {{ r.message }}
-  {% if r.actions_url %}<a href="{{ r.actions_url }}" target="_blank" rel="noopener noreferrer" class="underline ml-1">Open the Actions page</a>{% endif %}
-</p>
+{#- The answer to "Run now" (HTMX puts it in the toast area). -#}
+{% from "components/toast.html" import toast %}{{ toast(r.message, "success" if r.ok else "error", "Open the Actions page", r.actions_url) }}

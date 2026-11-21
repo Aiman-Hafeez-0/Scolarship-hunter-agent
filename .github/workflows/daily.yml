@@ -42,11 +42,12 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
-        run: uv sync --locked --no-dev
+        run: uv sync --locked --no-dev --group pipeline
 
-      # Brings the database schema up to date. Safe every time: only new SQL files are applied.
+      # Brings the database schema up to date (also the dashboard's login_failures table).
+      # Safe every time: only new SQL files are applied.
       - name: Apply database migrations
-        run: uv run --no-dev python -m pipeline.migrate
+        run: uv run --no-dev --group pipeline python -m pipeline.migrate
 
       - name: Send reminders and admin alerts
-        run: uv run --no-dev python -m pipeline.run reminders
+        run: uv run --no-dev --group pipeline python -m pipeline.run reminders

@@ -15,11 +15,13 @@ from app.tests.conftest import (
     PASSWORD,
     SID,
     TODAY,
+    FakeLoginLimiter,
     FakeStore,
     csrf_from,
     log_in,
     make_settings,
     row,
+    use_fake_limiter,
 )
 
 # ---------- health and login required ----------
@@ -99,6 +101,7 @@ def test_right_password_logs_in_and_sets_a_safe_cookie(client: TestClient) -> No
 def test_cookie_is_secure_when_not_on_localhost(store: FakeStore) -> None:
     app = create_app(make_settings())
     app.dependency_overrides[get_store] = lambda: store
+    use_fake_limiter(app)
     with TestClient(app, base_url="https://dashboard.example.org") as remote:
         response = log_in(remote)
     session = next(h for h in response.headers.get_list("set-cookie")
@@ -140,6 +143,7 @@ def test_login_never_redirects_to_another_site(client: TestClient) -> None:
 
 def test_login_page_explains_missing_setup(store: FakeStore) -> None:
     app = create_app(make_settings(dashboard_password_hash=None))
+    use_fake_limiter(app)
     with TestClient(app, base_url="http://localhost") as unset:
         page = unset.get("/login")
         response = log_in(unset)
@@ -164,7 +168,7 @@ def test_five_failed_logins_block_further_tries(client: TestClient) -> None:
     blocked = log_in(client)  # even the right password is refused now
 
     assert blocked.status_code == 429
-    assert "Too many failed logins" in blocked.text
+    assert "Too many tries. Wait" in blocked.text
     assert int(blocked.headers["Retry-After"]) > 0
     assert client.get("/api/v1/runs").status_code == 401
 
@@ -176,6 +180,43 @@ def test_successful_login_resets_the_count(client: TestClient) -> None:
     client.cookies.clear()
     for _ in range(4):
         assert log_in(client, password="wrong password!!").status_code == 401
+
+
+def test_login_is_allowed_again_after_15_minutes(
+    client: TestClient, limiter: FakeLoginLimiter
+) -> None:
+    for _ in range(5):
+        log_in(client, password="wrong password!!")
+    assert log_in(client).status_code == 429
+
+    limiter.now += auth.LOGIN_WINDOW_S + 1  # the failures leave the 15-minute window
+
+    assert log_in(client).status_code == 303
+
+
+def _key_after_failed_login(on_vercel: bool, headers: dict[str, str]) -> list[str]:
+    app = create_app(make_settings(vercel=on_vercel))
+    limiter = use_fake_limiter(app)
+    with TestClient(app, base_url="http://localhost", headers=headers) as test_client:
+        log_in(test_client, password="wrong password!!")
+    return list(limiter.failures)
+
+
+def test_on_vercel_the_forwarded_address_is_counted() -> None:
+    keys = _key_after_failed_login(True, {"X-Forwarded-For": "203.0.113.7, 10.0.0.1"})
+    assert keys == ["203.0.113.7"]
+
+
+def test_elsewhere_a_forwarded_header_is_ignored() -> None:
+    keys = _key_after_failed_login(False, {"X-Forwarded-For": "203.0.113.7"})
+    assert keys == ["testclient"]  # the real connection, not the header anyone can send
+
+
+def test_login_without_database_shows_a_clear_error() -> None:
+    app = create_app(make_settings())  # no limiter override: it needs DATABASE_URL
+    with TestClient(app, base_url="http://localhost") as no_db:
+        response = log_in(no_db)
+    assert response.status_code == 503 and "DATABASE_URL is not set" in response.text
 
 
 # ---------- CSRF ----------
@@ -237,8 +278,8 @@ def test_home_shows_counts_deadlines_and_last_run(logged_in: TestClient, store: 
 
     page = logged_in.get("/").text
 
-    assert "5 days left" in page and "bg-red-100" in page
-    assert "20 days left" in page and "bg-orange-100" in page
+    assert "5 days left" in page and 'data-tone="red"' in page
+    assert "20 days left" in page and 'data-tone="amber"' in page
     assert "90 days left" in page
     assert "(estimated)" in page
     assert "No successful weekly run" not in page
@@ -343,7 +384,7 @@ def test_closed_items_are_hidden_unless_asked(logged_in: TestClient, store: Fake
 def test_detail_page_shows_evidence_badges_and_reasons(logged_in: TestClient) -> None:
     page = logged_in.get(f"/scholarships/{SID}").text
 
-    assert "needs review" in page and "bg-yellow-100" in page
+    assert "needs review" in page and 'data-badge="review"' in page
     assert "deadlines[1] quote not found on page (score 62)" in page
     assert "not checked yet" in page
     assert "<details" in page and "Full tuition waiver and stipend" in page
@@ -360,7 +401,7 @@ def test_verified_item_shows_when_it_was_checked(logged_in: TestClient, store: F
     page = logged_in.get(f"/scholarships/{SID}").text
     assert "not checked yet" not in page
     assert "checked 18 Nov 2026, 08:00 PKT" in page
-    assert "bg-yellow-100" not in page
+    assert 'data-badge="review"' not in page
 
 
 def test_unknown_scholarship_is_404(logged_in: TestClient) -> None:
@@ -379,7 +420,7 @@ def test_detail_json(logged_in: TestClient) -> None:
 
 def test_runs_page_lists_the_history(logged_in: TestClient) -> None:
     page = logged_in.get("/runs").text
-    assert "weekly" in page and "15,400" in page  # tokens in + out
+    assert "Weekly" in page and "15,400" in page  # tokens in + out
     assert logged_in.get("/api/v1/runs").json()[0]["sources_failed"] == 1
 
 
@@ -389,6 +430,7 @@ def test_runs_page_lists_the_history(logged_in: TestClient) -> None:
 def test_missing_database_url_shows_a_clear_error() -> None:
     app = create_app(make_settings())
     app.dependency_overrides[get_today] = lambda: TODAY
+    use_fake_limiter(app)
     with TestClient(app, base_url="http://localhost") as no_db:
         log_in(no_db)
         page = no_db.get("/runs")

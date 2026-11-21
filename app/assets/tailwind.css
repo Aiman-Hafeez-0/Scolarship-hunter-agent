@@ -1,0 +1,103 @@
+/* Tailwind source for the dashboard. The design rules are in docs/design.md.
+   Build app/static/app.css from it with:  uv run python -m app.build_css  */
+
+/* source(none): only scan the files listed below (never .venv, data/ or tests). */
+@import "tailwindcss" source(none);
+@source "../templates";
+@source "../static/app.js";
+
+/* Dark mode follows the "dark" class on <html> (set by the theme toggle), not the OS. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* Type scale: page title, section title, body, small, stat. */
+  --text-title: 1.5rem;
+  --text-title--line-height: 2rem;
+  --text-title--font-weight: 700;
+  --text-title--letter-spacing: -0.015em;
+  --text-section: 1rem;
+  --text-section--line-height: 1.5rem;
+  --text-section--font-weight: 600;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.5rem;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.25rem;
+  --text-small--font-weight: 500;
+  --text-stat: 1.875rem;
+  --text-stat--line-height: 2.25rem;
+  --text-stat--font-weight: 700;
+  --text-stat--letter-spacing: -0.02em;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-slate-50 font-sans text-body text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+  /* Visible keyboard focus everywhere (mouse clicks do not show it). */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    @apply outline-2 outline-offset-2 outline-teal-700 dark:outline-teal-400;
+  }
+  /* Dialogs: the slide-over and the confirm box use the native <dialog> element. */
+  dialog::backdrop {
+    background: rgb(15 23 42 / 0.5);
+  }
+}
+
+@layer components {
+  /* HTMX: a spinner inside a button shows only while its request runs. */
+  .htmx-indicator {
+    display: none;
+  }
+  .htmx-request .htmx-indicator,
+  .htmx-request.htmx-indicator {
+    display: inline-flex;
+  }
+  .htmx-request .htmx-hide-on-request,
+  .htmx-request.htmx-hide-on-request {
+    display: none;
+  }
+  #results.htmx-request {
+    opacity: 0.55;
+    transition: opacity 150ms;
+  }
+
+  /* The slide-over panel and the mobile drawer slide in from the sides. */
+  dialog.slide-over[open] {
+    animation: slide-in-right 200ms ease-out;
+  }
+  dialog.drawer[open] {
+    animation: slide-in-left 200ms ease-out;
+  }
+  .toast-enter {
+    animation: toast-in 200ms ease-out;
+  }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

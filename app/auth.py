@@ -2,20 +2,21 @@
 
 - The password is never stored, only its argon2 hash (DASHBOARD_PASSWORD_HASH).
 - After login the browser gets a session cookie signed with SESSION_SECRET. Anyone can read
-  a signed cookie, but nobody can change or forge it without the secret. It expires after
-  7 days (the signature itself carries the time, so an old cookie stops working too).
+  a signed cookie, but nobody can change or forge it without the secret. With "Keep me
+  signed in" it lasts 7 days; without it, the browser forgets it when it closes and the
+  server refuses it after 12 hours anyway (the signature itself carries the time, so an old
+  cookie stops working too).
 - CSRF: every POST form carries a random token that must equal the one in the (signed) CSRF
   cookie. Another website can make your browser send a form, but it cannot read the token.
-- At most 5 failed logins per 15 minutes from one IP address (kept in memory, so restarting
-  the server clears it).
+- At most 5 failed logins per 15 minutes from one IP address. The failures are kept in the
+  database (see PostgresLoginLimiter in app/queries.py), because on Vercel each request may
+  run on a different server instance and instances share no memory.
 """
 
 import hmac
 import secrets
-import time
-from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
@@ -28,6 +29,7 @@ CSRF_COOKIE = "sh_csrf"
 CSRF_FIELD = "csrf_token"
 CSRF_HEADER = "x-csrf-token"
 SESSION_MAX_AGE_S = 7 * 24 * 3600
+SHORT_SESSION_MAX_AGE_S = 12 * 3600  # "Keep me signed in" not ticked
 MIN_SECRET_LENGTH = 32
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -73,20 +75,28 @@ def _serializer(settings: Settings, purpose: str) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.session_secret, salt=f"scholarship-hunter-{purpose}")
 
 
-def make_session(settings: Settings, email: str) -> str:
-    return _serializer(settings, "session").dumps({"email": email})
+def make_session(settings: Settings, email: str, remember: bool = True) -> str:
+    return _serializer(settings, "session").dumps({"email": email, "remember": remember})
 
 
-def read_session(settings: Settings, cookie: str | None) -> str | None:
-    """The logged-in email, or None if the cookie is missing, forged or older than 7 days."""
+def read_session(
+    settings: Settings, cookie: str | None, now: datetime | None = None
+) -> str | None:
+    """The logged-in email, or None if the cookie is missing, forged or too old: older than
+    7 days, or than 12 hours when "Keep me signed in" was not ticked."""
     if not cookie or setup_problems(settings):
         return None
     try:
-        data = _serializer(settings, "session").loads(cookie, max_age=SESSION_MAX_AGE_S)
+        data, signed_at = _serializer(settings, "session").loads(
+            cookie, max_age=SESSION_MAX_AGE_S, return_timestamp=True
+        )
     except BadSignature:  # also covers SignatureExpired
         return None
     email = data.get("email") if isinstance(data, dict) else None
     if not isinstance(email, str):
+        return None
+    age = (now or datetime.now(UTC)) - signed_at
+    if not data.get("remember", True) and age > timedelta(seconds=SHORT_SESSION_MAX_AGE_S):
         return None
     same = hmac.compare_digest(email.lower().encode(), settings.dashboard_email.lower().encode())
     return email if same else None  # a changed DASHBOARD_EMAIL logs the old one out
@@ -120,34 +130,23 @@ def is_local(hostname: str | None) -> bool:
     return (hostname or "") in LOCAL_HOSTS
 
 
-@dataclass
-class LoginRateLimiter:
-    """Allows `max_failures` failed logins per `window_s` seconds for each key (IP address)."""
+MAX_LOGIN_FAILURES = 5
+LOGIN_WINDOW_S = 15 * 60
 
-    max_failures: int = 5
-    window_s: float = 15 * 60
-    clock: Callable[[], float] = time.monotonic
-    _failures: dict[str, deque[float]] = field(default_factory=dict)
 
-    def _recent(self, key: str) -> deque[float]:
-        times = self._failures.setdefault(key, deque())
-        cutoff = self.clock() - self.window_s
-        while times and times[0] <= cutoff:
-            times.popleft()
-        return times
+class LoginLimiter(Protocol):
+    """Counts failed logins per key (the client's IP address) inside a moving time window."""
 
     def blocked(self, key: str) -> bool:
-        return len(self._recent(key)) >= self.max_failures
-
-    def record_failure(self, key: str) -> None:
-        self._recent(key).append(self.clock())
+        """True after MAX_LOGIN_FAILURES failures in the last LOGIN_WINDOW_S seconds."""
+        ...
 
     def retry_after_s(self, key: str) -> int:
-        """Seconds until the oldest failure leaves the window (0 when not blocked)."""
-        times = self._recent(key)
-        if len(times) < self.max_failures:
-            return 0
-        return max(1, int(times[0] + self.window_s - self.clock()) + 1)
+        """Seconds until one more try is allowed (0 when not blocked)."""
+        ...
+
+    def record_failure(self, key: str) -> None: ...
 
     def reset(self, key: str) -> None:
-        self._failures.pop(key, None)
+        """Forget this key's failures (after a successful login)."""
+        ...

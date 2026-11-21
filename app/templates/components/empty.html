@@ -1,0 +1,14 @@
+{# A friendly "nothing here yet" message: icon, short title, one sentence, optional action. #}
+{% from "components/icons.html" import icon %}
+{% from "components/buttons.html" import link_button %}
+
+{% macro empty_state(icon_name, title, text, action_text=None, action_href=None, compact=False) -%}
+<div class="flex flex-col items-center text-center {{ 'px-4 py-6' if compact else 'px-6 py-10' }}">
+  <span class="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ icon(icon_name, "size-6") }}</span>
+  <p class="mt-3 text-section text-slate-900 dark:text-white">{{ title }}</p>
+  <p class="mt-1 max-w-sm text-body text-slate-600 dark:text-slate-400">{{ text }}</p>
+  {%- if action_href %}
+  <div class="mt-4">{{ link_button(action_text, action_href, "secondary", "sm") }}</div>
+  {%- endif %}
+</div>
+{%- endmacro %}

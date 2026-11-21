@@ -1,0 +1,81 @@
+{# Form fields: label above, helper text below, error text (red) below that.
+   Every field gets id "f-<name>"; helper and error are linked with aria-describedby. #}
+
+{% set INPUT = "block w-full rounded-lg border-0 bg-white px-3 py-2 text-body text-slate-900 shadow-xs ring-1 ring-inset ring-slate-300 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-700 disabled:opacity-60 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-700 dark:placeholder:text-slate-500 dark:focus:ring-teal-400" %}
+{% set INPUT_ERROR = "ring-red-600 dark:ring-red-400" %}
+{% set LABEL = "block text-small text-slate-800 dark:text-slate-200" %}
+
+{% macro _described(name, help, error) -%}
+{%- set ids = [] -%}
+{%- if help %}{% set _ = ids.append("f-" ~ name ~ "-help") %}{% endif -%}
+{%- if error %}{% set _ = ids.append("f-" ~ name ~ "-error") %}{% endif -%}
+{%- if ids %} aria-describedby="{{ ids | join(' ') }}"{% endif %}{% if error %} aria-invalid="true"{% endif -%}
+{%- endmacro %}
+
+{% macro _notes(name, help, error) -%}
+{%- if help %}<p id="f-{{ name }}-help" class="mt-1.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ help }}</p>{% endif -%}
+{%- if error %}<p id="f-{{ name }}-error" class="mt-1.5 text-small text-red-700 dark:text-red-300">{{ error }}</p>{% endif -%}
+{%- endmacro %}
+
+{% macro _label(name, label, required) -%}
+<label for="f-{{ name }}" class="{{ LABEL }}">{{ label }}{% if required %} <span class="text-red-700 dark:text-red-300" aria-hidden="true">*</span>{% endif %}</label>
+{%- endmacro %}
+
+{% macro text_field(name, label, value="", type="text", help="", error="", required=False, placeholder="", step="", autocomplete="", cls="") -%}
+<div class="{{ cls }}">
+  {{ _label(name, label, required) }}
+  <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value if value is not none else '' }}"
+         {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
+         {%- if step %} step="{{ step }}"{% endif %}
+         {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
+         {%- if required %} required{% endif %}{{ _described(name, help, error) }}
+         class="mt-1.5 {{ INPUT }}{% if error %} {{ INPUT_ERROR }}{% endif %}">
+  {{ _notes(name, help, error) }}
+</div>
+{%- endmacro %}
+
+{# options: a list of values; each is shown with the label filter ("entry_test" -> "entry test").
+   blank: the text of an empty first option ("All"), or None for no empty option. #}
+{% macro select_field(name, label, options, current, blank="All", help="", error="", required=False, cls="") -%}
+<div class="{{ cls }}">
+  {{ _label(name, label, required) }}
+  <select id="f-{{ name }}" name="{{ name }}"{{ _described(name, help, error) }}
+          class="mt-1.5 {{ INPUT }} pr-8{% if error %} {{ INPUT_ERROR }}{% endif %}">
+    {%- if blank is not none %}<option value="">{{ blank }}</option>{% endif %}
+    {%- for option in options %}
+    <option value="{{ option }}"{% if option == current %} selected{% endif %}>{{ option | label | capitalize }}</option>
+    {%- endfor %}
+  </select>
+  {{ _notes(name, help, error) }}
+</div>
+{%- endmacro %}
+
+{% macro checkbox(name, label, checked=False, help="", value="1", cls="") -%}
+<div class="flex gap-3 {{ cls }}">
+  <input id="f-{{ name }}" name="{{ name }}" type="checkbox" value="{{ value }}"{% if checked %} checked{% endif %}{{ _described(name, help, "") }}
+         class="mt-0.5 size-4 shrink-0 cursor-pointer rounded border-slate-300 accent-teal-700 dark:accent-teal-400">
+  <div>
+    <label for="f-{{ name }}" class="cursor-pointer text-body text-slate-800 dark:text-slate-200">{{ label }}</label>
+    {{ _notes(name, help, "") }}
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro textarea(name, label, value="", rows=4, help="", error="", cls="") -%}
+<div class="{{ cls }}">
+  {{ _label(name, label, False) }}
+  <textarea id="f-{{ name }}" name="{{ name }}" rows="{{ rows }}"{{ _described(name, help, error) }}
+            class="mt-1.5 {{ INPUT }}{% if error %} {{ INPUT_ERROR }}{% endif %}">{{ value if value is not none else '' }}</textarea>
+  {{ _notes(name, help, error) }}
+</div>
+{%- endmacro %}
+
+{# The list of every problem, above a form that came back with errors. #}
+{% macro form_errors(errors) -%}
+{%- if errors %}
+<div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-body text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100">
+  <p class="font-semibold">{% if errors | length == 1 %}Please fix this problem:{% else %}Please fix these {{ errors | length }} problems:{% endif %}</p>
+  <ul class="mt-1 list-disc pl-5">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+</div>
+{%- endif %}
+{%- endmacro %}

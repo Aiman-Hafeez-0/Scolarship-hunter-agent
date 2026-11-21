@@ -32,11 +32,11 @@ from pipeline.llm.provider import LLMProvider
 from pipeline.models import Change, FetchResult, FetchStatus, Source
 from pipeline.nodes.detect_change import detect_changes
 from pipeline.nodes.extract import ExtractResult, extract_first, extract_retry
-from pipeline.nodes.fetch import fetch_source, make_client
+from pipeline.nodes.fetch import fetch_source
 from pipeline.nodes.validate import ValidatedScholarship, validate_extraction
 from pipeline.prompts import EXTRACT_VERSION
 from pipeline.ratelimit import DomainRateLimiter
-from pipeline.robots import RobotsChecker
+from pipeline.robots import RobotsChecker, make_client
 
 logger = logging.getLogger(__name__)
 

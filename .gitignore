@@ -25,3 +25,5 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+# The Tailwind CLI that app/build_css.py downloads.
+.tools/

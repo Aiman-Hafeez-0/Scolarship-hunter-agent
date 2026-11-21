@@ -8,7 +8,15 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.main import create_app, get_store, get_today
-from app.tests.conftest import SID, TODAY, FakeStore, csrf_from, log_in, make_settings
+from app.tests.conftest import (
+    SID,
+    TODAY,
+    FakeStore,
+    csrf_from,
+    log_in,
+    make_settings,
+    use_fake_limiter,
+)
 
 TOKEN = "github_pat_SECRET123"
 ACTIONS = "https://github.com/owner/scholarship-hunter/actions/workflows/weekly.yml"
@@ -28,6 +36,7 @@ def _htmx(client: TestClient, page: str = "/") -> dict[str, str]:
 def _client_with(store: FakeStore, **settings: object) -> TestClient:
     app = create_app(make_settings(**settings))
     app.dependency_overrides[get_store] = lambda: store
+    use_fake_limiter(app)
     app.dependency_overrides[get_today] = lambda: TODAY
     client = TestClient(app, base_url="http://localhost")
     log_in(client)

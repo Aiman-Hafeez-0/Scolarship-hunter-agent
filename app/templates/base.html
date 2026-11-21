@@ -1,66 +1,141 @@
+{#- The page frame. Logged-in pages (with `shell`) get the sidebar and top bar; the login and
+    public error pages get a plain frame. Each page sets, before its blocks:
+      {% set active = "overview" %}           which sidebar item is highlighted
+      {% set title = "Overview" %}            the page title in the top bar
+      {% set crumbs = [("Opportunities", "/scholarships")] %}   parent pages, if any
+    Design rules: docs/design.md. -#}
+{% from "components/icons.html" import icon %}
+{% from "components/nav.html" import sidebar, logo %}
+{% from "components/buttons.html" import btn, spinner %}
+{% from "components/dialog.html" import confirm_dialog %}
+{% from "components/toast.html" import toast %}
+{%- set title = title | default("Scholarship Hunter") -%}
+{%- set crumbs = crumbs | default([]) -%}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"historyCacheSize": 0}'>
-  <title>{% block title %}Scholarship Hunter{% endblock %}</title>
-  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-  <style>
-    .htmx-indicator { display: none; }
-    .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-flex; }
-    .htmx-request #results, #results.htmx-request { opacity: .5; }
-  </style>
+  <title>{% block title %}{% if title != "Scholarship Hunter" %}{{ title }} · {% endif %}Scholarship Hunter{% endblock %}</title>
+  {#- Dark mode before the first paint, so the page never flashes white. -#}
+  <script>try { if (localStorage.getItem("theme") === "dark") document.documentElement.classList.add("dark"); } catch (e) {}</script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f766e'/%3E%3Cpath d='M16 8 5 13l11 5 11-5-11-5Zm-6 7.5v4.5c0 1.7 2.7 3 6 3s6-1.3 6-3v-4.5' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="{{ asset('app.css') }}">
+  <script src="{{ asset('htmx.min.js') }}" defer></script>
+  <script src="{{ asset('app.js') }}" defer></script>
 </head>
-<body class="bg-slate-50 text-slate-900 min-h-screen" hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
-  {% if user %}
-  <nav class="bg-white border-b border-slate-200">
-    <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
-      <a href="/" class="font-semibold text-indigo-700">Scholarship Hunter</a>
-      <a href="/" class="text-sm hover:underline">Home</a>
-      <a href="/scholarships" class="text-sm hover:underline">Scholarships</a>
-      <a href="/runs" class="text-sm hover:underline">Runs</a>
-      <a href="/sources" class="text-sm hover:underline">Sources</a>
-      <a href="/profile" class="text-sm hover:underline">Profile</a>
-      <form method="post" action="/logout" class="sm:ml-auto">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="text-sm text-slate-600 hover:underline">Log out</button>
-      </form>
-    </div>
-  </nav>
-  {% endif %}
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+  <a href="#main" class="sr-only z-[60] rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
 
-  <div id="htmx-error" role="alert" class="hidden max-w-6xl mx-auto mt-4 px-4">
-    <div class="rounded border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm">
-      <span id="htmx-error-text">Something went wrong.</span>
-      <button type="button" class="ml-2 underline" onclick="location.reload()">Reload</button>
-    </div>
+  {%- if shell %}
+  {#- Desktop: fixed sidebar. Phones: the same navigation as a drawer. -#}
+  <aside class="hidden border-r border-slate-200 bg-white lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:block lg:w-64 dark:border-slate-800 dark:bg-slate-900">
+    {{ sidebar(shell, active) }}
+  </aside>
+  <dialog id="mobile-nav" aria-label="Menu"
+          class="drawer fixed inset-y-0 left-0 right-auto z-50 m-0 h-dvh max-h-none w-72 max-w-[85vw] border-r border-slate-200 bg-white p-0 text-slate-900 shadow-xl lg:hidden dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+    {{ sidebar(shell, active, drawer=True) }}
+  </dialog>
+
+  <div class="lg:pl-64">
+    <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+      <div class="flex min-h-16 items-center gap-2 px-4 py-2 sm:gap-3 sm:px-6 lg:px-8">
+        <button type="button" data-open-dialog="mobile-nav" aria-label="Open menu" aria-controls="mobile-nav"
+                class="-ml-1 grid size-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 lg:hidden dark:text-slate-300 dark:hover:bg-slate-800">
+          {{ icon("menu", "size-5") }}
+        </button>
+
+        <div class="min-w-0 flex-1">
+          {%- if crumbs %}
+          <nav aria-label="Breadcrumb">
+            <ol class="flex items-center gap-1 text-small text-slate-600 dark:text-slate-400">
+              {%- for text, href in crumbs %}
+              <li class="flex min-w-0 items-center gap-1"><a href="{{ href }}" class="truncate rounded hover:text-teal-700 hover:underline dark:hover:text-teal-400">{{ text }}</a>{{ icon("chevron-right", "size-3.5") }}</li>
+              {%- endfor %}
+              <li class="sr-only" aria-current="page">{{ title }}</li>
+            </ol>
+          </nav>
+          {%- endif %}
+          <h1 class="line-clamp-2 text-lg font-bold tracking-tight break-words text-slate-900 sm:line-clamp-1 sm:text-title dark:text-white" title="{{ title }}">{{ title }}</h1>
+        </div>
+
+        <form method="get" action="/scholarships" role="search" class="relative hidden w-64 shrink-0 md:block xl:w-80">
+          <label for="global-search" class="sr-only">Search opportunities</label>
+          {{ icon("search", "pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500 dark:text-slate-400") }}
+          <input id="global-search" data-global-search name="q" type="search" placeholder="Search opportunities" autocomplete="off"
+                 class="block h-10 w-full rounded-lg border-0 bg-slate-100 pl-9 pr-9 text-body text-slate-900 ring-1 ring-inset ring-transparent placeholder:text-slate-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-400 dark:focus:bg-slate-950 dark:focus:ring-teal-400">
+          <kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-slate-300 bg-white px-1.5 text-[0.6875rem] font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-400" title="Press / to search">/</kbd>
+        </form>
+
+        <button type="button" data-theme-toggle aria-pressed="false" aria-label="Switch to dark mode" title="Switch to dark mode"
+                class="grid size-10 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">
+          {{ icon("moon", "size-5 dark:hidden") }}{{ icon("sun", "hidden size-5 dark:block") }}
+        </button>
+
+        {%- if shell.run_now_problem %}
+        <button type="button" aria-disabled="true" title="Run now needs setup: {{ shell.run_now_problem }}" class="{{ btn('primary', 'md') }} shrink-0 px-3 sm:px-4">
+          {{ icon("play", "size-4") }}<span class="sr-only sm:not-sr-only">Run now</span>
+        </button>
+        {%- else %}
+        <form method="post" action="/runs/dispatch" hx-post="/runs/dispatch" hx-target="#toasts" hx-swap="afterbegin"
+              hx-disabled-elt="find button" data-confirm-dialog="confirm-run" class="shrink-0">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="{{ btn('primary', 'md') }} px-3 sm:px-4" title="Start the weekly workflow on GitHub Actions now">
+            <span class="htmx-indicator">{{ spinner() }}</span><span class="htmx-hide-on-request">{{ icon("play", "size-4") }}</span><span class="sr-only sm:not-sr-only">Run now</span>
+          </button>
+        </form>
+        {%- endif %}
+
+        <details data-menu class="relative shrink-0">
+          <summary aria-label="Account menu ({{ shell.user }})"
+                   class="grid size-9 cursor-pointer list-none place-items-center rounded-full bg-teal-700 font-bold text-white select-none hover:bg-teal-800 dark:bg-teal-400 dark:text-slate-950 dark:hover:bg-teal-300 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true">{{ shell.initial }}</span>
+          </summary>
+          <div class="absolute right-0 z-40 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+            <p class="px-3 py-2 text-small font-normal text-slate-600 dark:text-slate-400">Signed in as<span class="block truncate font-semibold text-slate-900 dark:text-white">{{ shell.user }}</span></p>
+            <div class="my-1 border-t border-slate-200 dark:border-slate-800"></div>
+            <a href="/profile" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-body font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">{{ icon("user", "size-4") }}Profile</a>
+            <form method="post" action="/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-body font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">{{ icon("log-out", "size-4") }}Log out</button>
+            </form>
+          </div>
+        </details>
+      </div>
+
+      {#- Phones and tablets: the search box gets its own row. -#}
+      <form method="get" action="/scholarships" role="search" class="relative px-4 pb-3 sm:px-6 md:hidden">
+        <label for="global-search-mobile" class="sr-only">Search opportunities</label>
+        {{ icon("search", "pointer-events-none absolute left-7 top-[1.125rem] size-4 text-slate-500 sm:left-9 dark:text-slate-400") }}
+        <input id="global-search-mobile" data-global-search name="q" type="search" placeholder="Search opportunities" autocomplete="off"
+               class="block h-10 w-full rounded-lg border-0 bg-slate-100 pl-9 pr-3 text-body text-slate-900 placeholder:text-slate-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-400 dark:focus:ring-teal-400">
+      </form>
+    </header>
+
+    <main id="main" tabindex="-1" class="mx-auto max-w-7xl px-4 py-6 focus:outline-none sm:px-6 lg:px-8 lg:py-8">
+      {% block content %}{% endblock %}
+    </main>
   </div>
 
-  <main class="max-w-6xl mx-auto px-4 py-6">
-    {% block content %}{% endblock %}
+  {%- if not shell.run_now_problem %}
+  {{ confirm_dialog("confirm-run", "Start a run now?",
+                    "This starts the weekly workflow on GitHub Actions: it checks every source and uses some LLM quota. It takes a few minutes.",
+                    "Start run", "primary", "play") }}
+  {%- endif %}
+  {%- else %}
+  <main id="main" tabindex="-1" class="focus:outline-none">
+    {% block bare %}{% endblock %}
   </main>
+  {%- endif %}
 
-  <script>
-    // Shows a red message when an HTMX request fails, and hides it when the next one starts.
-    (function () {
-      var box = document.getElementById("htmx-error");
-      var text = document.getElementById("htmx-error-text");
-      function show(message) { text.textContent = message; box.classList.remove("hidden"); }
-      document.body.addEventListener("htmx:beforeRequest", function () { box.classList.add("hidden"); });
-      document.body.addEventListener("htmx:responseError", function (e) {
-        var status = e.detail.xhr.status;
-        show(status === 503 ? "The database could not be reached. Try again in a minute."
-             : status === 403 ? "This page has expired. Reload it and try again."
-             : status === 404 ? "That item no longer exists. Reload the page."
-             : "Something went wrong (error " + status + ").");
-      });
-      document.body.addEventListener("htmx:sendError", function () {
-        show("No connection to the dashboard server.");
-      });
-      document.body.addEventListener("htmx:timeout", function () { show("The server took too long to answer."); });
-    })();
-  </script>
+  <div id="toasts" aria-live="polite"
+       class="pointer-events-none fixed inset-x-4 bottom-4 z-[70] flex flex-col items-end gap-3 sm:left-auto sm:right-6 sm:w-96">
+    {%- block toasts %}{% endblock -%}
+  </div>
+  <template id="error-toast-template">{{ toast("", "error") }}</template>
 </body>
 </html>

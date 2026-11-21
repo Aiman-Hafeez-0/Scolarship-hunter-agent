@@ -60,21 +60,6 @@ def test_csrf_cookie_cannot_be_used_as_session() -> None:
     assert auth.csrf_ok("token", "token")
 
 
-def test_rate_limiter_window() -> None:
-    now = [0.0]
-    limiter = auth.LoginRateLimiter(clock=lambda: now[0])
-    for _ in range(4):
-        limiter.record_failure("1.2.3.4")
-    assert not limiter.blocked("1.2.3.4")
-    limiter.record_failure("1.2.3.4")
-    assert limiter.blocked("1.2.3.4")
-    assert not limiter.blocked("5.6.7.8")  # another address is not affected
-    assert 0 < limiter.retry_after_s("1.2.3.4") <= 15 * 60 + 1
-
-    now[0] = 15 * 60 + 1  # the oldest failures leave the 15-minute window
-    assert not limiter.blocked("1.2.3.4")
-
-
 def test_is_local() -> None:
     assert auth.is_local("localhost") and auth.is_local("127.0.0.1")
     assert not auth.is_local("dashboard.example.org")

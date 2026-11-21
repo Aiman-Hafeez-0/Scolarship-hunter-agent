@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "functions": {
+    "app/main.py": {
+      "includeFiles": "{app/templates/**,app/static/**}",
+      "excludeFiles": "{**/tests/**,data/**,.venv/**,venv/**}"
+    }
+  }
+}

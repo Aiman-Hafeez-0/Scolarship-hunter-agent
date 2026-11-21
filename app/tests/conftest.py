@@ -8,10 +8,12 @@ from typing import Any
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app import auth
 from app.auth import hash_password
-from app.main import create_app, get_store, get_today
+from app.main import create_app, get_login_limiter, get_store, get_today
 from app.queries import (
     DeadlineDetail,
     FieldRow,
@@ -19,6 +21,7 @@ from app.queries import (
     ProfileEmailTaken,
     ProfileRecord,
     Quote,
+    RecentChange,
     RunRow,
     ScholarshipDetail,
     ScholarshipRow,
@@ -138,6 +141,7 @@ class FakeStore:
     rows: list[ScholarshipRow] = field(default_factory=lambda: [row()])
     details: dict[str, ScholarshipDetail] = field(default_factory=lambda: {SID: detail()})
     upcoming: list[UpcomingDeadline] = field(default_factory=list)
+    changes: list[RecentChange] = field(default_factory=list)
     run_rows: list[RunRow] = field(default_factory=lambda: [run_row()])
     last_good: datetime | None = field(default_factory=lambda: datetime.now(UTC))
     calls: list[str] = field(default_factory=list)
@@ -158,6 +162,9 @@ class FakeStore:
 
     def upcoming_deadlines(self, today: date, limit: int) -> list[UpcomingDeadline]:
         return self.upcoming[:limit]
+
+    def recent_changes(self, limit: int) -> list[RecentChange]:
+        return self.changes[:limit]
 
     def scholarship(self, profile_id: str | None, scholarship_id: str) -> ScholarshipDetail | None:
         return self.details.get(scholarship_id)
@@ -202,16 +209,58 @@ class FakeStore:
         return profile_id or "new-id"
 
 
+@dataclass
+class FakeLoginLimiter:
+    """auth.LoginLimiter kept in a dict, with a clock the test can move."""
+
+    now: float = 0.0
+    failures: dict[str, list[float]] = field(default_factory=dict)
+
+    def _recent(self, key: str) -> list[float]:
+        cutoff = self.now - auth.LOGIN_WINDOW_S
+        recent = [t for t in self.failures.get(key, []) if t > cutoff]
+        self.failures[key] = recent
+        return recent
+
+    def retry_after_s(self, key: str) -> int:
+        recent = self._recent(key)
+        if len(recent) < auth.MAX_LOGIN_FAILURES:
+            return 0
+        return max(1, int(recent[-auth.MAX_LOGIN_FAILURES] + auth.LOGIN_WINDOW_S - self.now) + 1)
+
+    def blocked(self, key: str) -> bool:
+        return self.retry_after_s(key) > 0
+
+    def record_failure(self, key: str) -> None:
+        self._recent(key).append(self.now)
+
+    def reset(self, key: str) -> None:
+        self.failures.pop(key, None)
+
+
+def use_fake_limiter(app: FastAPI) -> FakeLoginLimiter:
+    """Make the app keep its login rate limit in memory instead of the database."""
+    limiter = FakeLoginLimiter()
+    app.dependency_overrides[get_login_limiter] = lambda: limiter
+    return limiter
+
+
 @pytest.fixture
 def store() -> FakeStore:
     return FakeStore()
 
 
 @pytest.fixture
-def client(store: FakeStore) -> Iterator[TestClient]:
+def limiter() -> FakeLoginLimiter:
+    return FakeLoginLimiter()
+
+
+@pytest.fixture
+def client(store: FakeStore, limiter: FakeLoginLimiter) -> Iterator[TestClient]:
     """A client on http://localhost (so cookies work without https), not logged in."""
     app = create_app(make_settings())
     app.dependency_overrides[get_store] = lambda: store
+    app.dependency_overrides[get_login_limiter] = lambda: limiter
     app.dependency_overrides[get_today] = lambda: TODAY
     with TestClient(app, base_url="http://localhost") as test_client:
         yield test_client
@@ -223,10 +272,15 @@ def csrf_from(html: str) -> str:
     return found.group(1)
 
 
-def log_in(client: TestClient, password: str = PASSWORD) -> Any:  # the TestClient's Response
+def log_in(
+    client: TestClient, password: str = PASSWORD, remember: bool = True
+) -> Any:  # the TestClient's Response
+    """Log in through the form ("Keep me signed in" ticked unless remember=False)."""
     token = csrf_from(client.get("/login").text)
-    return client.post("/login", data={"email": EMAIL, "password": password,
-                                       "csrf_token": token}, follow_redirects=False)  # fmt: skip
+    data = {"email": EMAIL, "password": password, "csrf_token": token}
+    if remember:
+        data["remember"] = "1"
+    return client.post("/login", data=data, follow_redirects=False)
 
 
 @pytest.fixture

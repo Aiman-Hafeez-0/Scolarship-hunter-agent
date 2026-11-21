@@ -1,67 +1,62 @@
 {% extends "base.html" %}
-{% from "_macros.html" import source_card %}
-{% block title %}Sources · Scholarship Hunter{% endblock %}
-{% macro field(name, text, placeholder="", required=false, help="") -%}
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">{{ text }}{% if required %} *{% endif %}</span>
-    <input name="{{ name }}" value="{{ values.get(name, '') }}" placeholder="{{ placeholder }}" {% if required %}required{% endif %}
-           class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm">
-    {% if help %}<span class="text-xs text-slate-500">{{ help }}</span>{% endif %}
-  </label>
-{%- endmacro %}
-{% macro choice(name, text, options, default) -%}
-  <label class="block">
-    <span class="text-xs font-medium text-slate-600">{{ text }} *</span>
-    <select name="{{ name }}" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm">
-      {% for option in options %}
-      <option value="{{ option }}" {% if values.get(name, default) == option %}selected{% endif %}>{{ option | label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-{%- endmacro %}
+{% from "components/icons.html" import icon %}
+{% from "components/buttons.html" import btn, link_button, spinner %}
+{% from "components/cards.html" import callout, SURFACE %}
+{% from "components/forms.html" import text_field, select_field, checkbox, form_errors %}
+{% from "components/slide_over.html" import slide_over %}
+{% from "components/empty.html" import empty_state %}
+{% from "_parts.html" import source_card %}
+{% set active = "sources" %}
+{% set title = "Sources" %}
 {% block content %}
-<h1 class="text-2xl font-semibold mb-4">Sources</h1>
+<div class="-mt-2 mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  <p class="max-w-2xl text-body text-slate-600 dark:text-slate-400">The official pages the agent checks. <span class="tabular-nums">{{ sources | length }}</span> source{{ '' if sources | length == 1 else 's' }}; pause one to skip it in the next runs.</p>
+  {{ link_button("Add source", "/sources?add=1", "primary", "md", "plus", attrs={"data-open-dialog": "add-source"}) }}
+</div>
 
-{% if added %}
-<section role="status" class="mb-6 rounded border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-900">
-  <p class="font-medium">Saved "{{ added.name }}": robots.txt allows it. The next run checks it.</p>
+{%- if added %}
+{% call callout("success", role="status", cls="mb-6") %}
+  <p class="font-semibold">Saved "{{ added.name }}": robots.txt allows it. The next run checks it.</p>
   <details class="mt-2">
-    <summary class="cursor-pointer">Optional: the same entry for <code>pipeline/sources.yaml</code></summary>
-    <pre class="mt-2 overflow-x-auto rounded bg-white border border-green-200 p-3 text-xs text-slate-800">{{ added_yaml }}</pre>
+    <summary class="cursor-pointer text-small">Optional: the same entry for <code>pipeline/sources.yaml</code></summary>
+    <pre class="mt-2 overflow-x-auto rounded-lg border border-green-200 bg-white p-3 text-xs text-slate-800 dark:border-green-500/30 dark:bg-slate-950 dark:text-slate-200">{{ added_yaml }}</pre>
   </details>
-</section>
-{% endif %}
+{% endcall %}
+{%- endif %}
 
-<details class="mb-6 bg-white rounded-lg border border-slate-200 p-4" {% if errors %}open{% endif %}>
-  <summary class="cursor-pointer font-semibold">Add a source</summary>
-  {% if errors %}
-  <ul role="alert" class="mt-3 rounded border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800 list-disc list-inside">
-    {% for error in errors %}<li>{{ error }}</li>{% endfor %}
-  </ul>
-  {% endif %}
-  <form method="post" action="/sources" class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3"
-        onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Checking robots.txt…'">
+{%- if sources %}
+<ul class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+  {%- for s in sources %}{{ source_card(s, csrf_token) }}{% endfor %}
+</ul>
+{%- else %}
+<div class="{{ SURFACE }}">
+  {{ empty_state("globe", "No sources yet", "Add the official page of a scholarship, an admission or an entry test, and the next run will read it.", "Add source", "/sources?add=1") }}
+</div>
+{%- endif %}
+
+{% call slide_over("add-source", "Add a source", "An official, public page. We check robots.txt before saving it.", open=open_add) %}
+  {{ form_errors(errors) }}
+  <form method="post" action="/sources" class="{{ 'mt-5 ' if errors }}space-y-4" data-loading-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    {{ field("url", "Page URL", "https://...", true, "Must start with https:// and be public (no login).") }}
-    {{ field("name", "Name", "Example University MS admissions", true) }}
-    {{ field("key", "Key", "example-uni-ms", true, "Lowercase letters, digits and dashes.") }}
-    {{ field("program_key", "Program key", "", false, "Blank = same as the key.") }}
-    {{ field("country", "Country", "PK", true) }}
-    {{ choice("opportunity_type", "Type", ["scholarship", "admission", "entry_test"], "scholarship") }}
-    {{ choice("location", "Location", ["abroad", "pakistan"], "abroad") }}
-    {{ choice("type", "Trust", ["official", "lead"], "official") }}
-    {{ field("note", "Note") }}
-    <label class="inline-flex items-center gap-2 text-sm self-end">
-      <input type="checkbox" name="is_pdf" value="1" {% if values.get('is_pdf') %}checked{% endif %}> The URL is a PDF file
-    </label>
-    <div class="sm:col-span-2">
-      <button class="rounded bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-60">Check and save</button>
+    {{ text_field("url", "Page URL", values.get("url", ""), "url", "Must start with https:// and be public (no login).", required=True, placeholder="https://...") }}
+    {{ text_field("name", "Name", values.get("name", ""), required=True, placeholder="Example University MS admissions") }}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {{ text_field("key", "Key", values.get("key", ""), help="Lowercase letters, digits and dashes.", required=True, placeholder="example-uni-ms") }}
+      {{ text_field("program_key", "Program key", values.get("program_key", ""), help="Blank = same as the key.") }}
+      {{ text_field("country", "Country", values.get("country", ""), help="Two letters, e.g. PK or DE.", required=True, placeholder="PK") }}
+      {{ select_field("opportunity_type", "Type", ["scholarship", "admission", "entry_test"], values.get("opportunity_type", "scholarship"), blank=None, required=True) }}
+      {{ select_field("location", "Location", ["abroad", "pakistan"], values.get("location", "abroad"), blank=None, required=True) }}
+      {{ select_field("type", "Trust", ["official", "lead"], values.get("type", "official"), blank=None, required=True, help="Lead = a news or blog page that points to the official one.") }}
+    </div>
+    {{ text_field("note", "Note", values.get("note", "")) }}
+    {{ checkbox("is_pdf", "The URL is a PDF file", values.get("is_pdf")) }}
+    <div class="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end dark:border-slate-800">
+      <button type="button" class="{{ btn('secondary', 'md') }}" data-close-dialog>Cancel</button>
+      <button type="submit" class="{{ btn('primary', 'md') }}">
+        <span data-idle>Check and save</span>
+        <span data-busy class="hidden items-center gap-2">{{ spinner() }}Checking robots.txt…</span>
+      </button>
     </div>
   </form>
-</details>
-
-<p class="text-sm text-slate-600 mb-2">{{ sources | length }} sources</p>
-<ul class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-  {% for s in sources %}{{ source_card(s, csrf_token) }}{% endfor %}
-</ul>
+{% endcall %}
 {% endblock %}

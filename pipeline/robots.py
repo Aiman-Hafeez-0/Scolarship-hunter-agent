@@ -14,10 +14,20 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from pipeline.config import Settings
 from pipeline.ratelimit import DomainRateLimiter, domain_of
 
 BOT_TOKEN = "ScholarshipHunterBot"
 MAX_ROBOTS_BYTES = 500 * 1024  # RFC 9309 asks crawlers to read at least 500 KiB.
+
+
+def make_client(settings: Settings) -> httpx.AsyncClient:
+    """The one HTTP client used for every request in a run (also by the dashboard)."""
+    return httpx.AsyncClient(
+        headers={"User-Agent": settings.user_agent},
+        timeout=settings.request_timeout_s,
+        follow_redirects=False,  # we follow redirects ourselves, checking robots.txt each hop
+    )
 
 
 class RobotsChecker:

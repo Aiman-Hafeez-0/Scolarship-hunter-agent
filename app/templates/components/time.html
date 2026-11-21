@@ -1,0 +1,14 @@
+{# Times. Every time is shown in Pakistan time (PKT). rel_time shows "2 hours ago" with the
+   exact time on hover; exact_time shows "18 Nov 2026, 08:17 PKT". #}
+
+{% macro rel_time(value, empty="-") -%}
+{%- if value -%}
+<time datetime="{{ value.isoformat() }}" title="{{ value | pkt }}" class="tabular-nums">{{ value | ago }}</time>
+{%- else -%}{{ empty }}{%- endif -%}
+{%- endmacro %}
+
+{% macro exact_time(value, empty="-") -%}
+{%- if value -%}
+<time datetime="{{ value.isoformat() }}" class="tabular-nums">{{ value | pkt }}</time>
+{%- else -%}{{ empty }}{%- endif -%}
+{%- endmacro %}

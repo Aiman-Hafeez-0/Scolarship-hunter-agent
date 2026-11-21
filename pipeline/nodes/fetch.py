@@ -13,7 +13,7 @@ import httpx
 from pipeline.config import Settings
 from pipeline.models import FetchResult, FetchStatus, Source
 from pipeline.ratelimit import DomainRateLimiter, domain_of
-from pipeline.robots import RobotsChecker
+from pipeline.robots import RobotsChecker, make_client
 from pipeline.text import (
     append_links,
     content_hash,
@@ -26,15 +26,6 @@ from pipeline.text import (
 
 MIN_TEXT_CHARS = 50
 MAX_REDIRECTS = 5
-
-
-def make_client(settings: Settings) -> httpx.AsyncClient:
-    """The one HTTP client used for every request in a run."""
-    return httpx.AsyncClient(
-        headers={"User-Agent": settings.user_agent},
-        timeout=settings.request_timeout_s,
-        follow_redirects=False,  # we follow redirects ourselves, checking robots.txt each hop
-    )
 
 
 def _should_retry(status_code: int) -> bool:

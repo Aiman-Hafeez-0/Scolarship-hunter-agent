@@ -1,0 +1,69 @@
+{# Badges and chips. Color = meaning (docs/design.md): red <= 7 days, amber <= 30 days or
+   "needs review", green = eligible, blue = maybe, gray = closed or nothing urgent.
+   data-badge / data-tone say what a badge means, so tests do not depend on CSS classes. #}
+{% from "components/icons.html" import icon %}
+
+{% set TONES = {
+  "red": "bg-red-50 text-red-800 ring-red-200 dark:bg-red-500/15 dark:text-red-200 dark:ring-red-500/30",
+  "amber": "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30",
+  "green": "bg-green-50 text-green-800 ring-green-200 dark:bg-green-500/15 dark:text-green-200 dark:ring-green-500/30",
+  "blue": "bg-blue-50 text-blue-800 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:ring-blue-500/30",
+  "gray": "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700",
+  "outline": "bg-white text-slate-700 ring-slate-300 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700",
+} %}
+
+{% macro badge(text, tone="gray", kind="", icon_name=None, title=None) -%}
+<span data-badge="{{ kind }}" data-tone="{{ tone }}"{% if title %} title="{{ title }}"{% endif %}
+      class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small whitespace-nowrap ring-1 ring-inset {{ TONES[tone] }}">
+  {%- if icon_name %}{{ icon(icon_name, "size-3.5") }}{% endif %}{{ text -}}
+</span>
+{%- endmacro %}
+
+{% set MATCH = {
+  "eligible": ("Eligible", "green", "circle-check"),
+  "maybe": ("Maybe", "blue", "circle-help"),
+  "not_eligible": ("Not eligible", "gray", "circle-x"),
+} %}
+
+{% macro match_badge(status) -%}
+  {%- set text, tone, ic = MATCH.get(status, ("Not matched", "outline", None)) -%}
+  {{ badge(text, tone, "match-" ~ (status or "not_matched"), ic) }}
+{%- endmacro %}
+
+{% set RUN = {"success": "green", "partial": "amber", "failed": "red"} %}
+
+{% macro run_badge(status) -%}
+  {{ badge(status | capitalize, RUN.get(status, "gray"), "run-" ~ status) }}
+{%- endmacro %}
+
+{% set TYPES = {
+  "scholarship": ("Scholarship", "graduation-cap"),
+  "admission": ("Admission", "bookmark-check"),
+  "entry_test": ("Entry test", "file-text"),
+} %}
+
+{% macro type_badge(opportunity_type) -%}
+  {%- set text, ic = TYPES.get(opportunity_type, (opportunity_type | label, "info")) -%}
+  {{ badge(text, "outline", "type", ic) }}
+{%- endmacro %}
+
+{% macro review_badge() -%}
+  {{ badge("needs review", "amber", "review", "triangle-alert", "A fact on this item failed a check") }}
+{%- endmacro %}
+
+{% macro unchecked_badge() -%}
+  {{ badge("not checked yet", "outline", "unchecked", None, "You have not compared it with the official page yet") }}
+{%- endmacro %}
+
+{% macro closed_badge() -%}
+  {{ badge("Closed", "gray", "closed") }}
+{%- endmacro %}
+
+{# "3 days left": red at 7 days or less, amber at 30 or less. The date shows on hover. #}
+{% macro countdown(deadline, today) -%}
+  {%- set days = days_left(deadline, today) -%}
+  <span data-badge="countdown" data-tone="{{ tone(days) }}" title="{{ deadline | day }}"
+        class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small whitespace-nowrap tabular-nums ring-1 ring-inset {{ TONES[tone(days)] }}">
+    {%- if days <= 7 %}{{ icon("clock", "size-3.5") }}{% endif %}{{ countdown_text(days) -}}
+  </span>
+{%- endmacro %}

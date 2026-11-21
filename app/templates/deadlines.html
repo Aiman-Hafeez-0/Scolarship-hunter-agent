@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "components/cards.html" import card, SURFACE %}
+{% from "components/empty.html" import empty_state %}
+{% from "_parts.html" import deadline_row %}
+{% set active = "deadlines" %}
+{% set title = "Deadlines" %}
+{% block content %}
+<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">
+  {%- if total %}{{ total }} upcoming deadline{{ '' if total == 1 else 's' }} of open opportunities, soonest first. Red means 7 days or less, amber 30 days or less.
+  {%- else %}Upcoming deadlines of open opportunities, soonest first.{% endif -%}
+</p>
+
+{%- if months %}
+<div class="space-y-6">
+  {%- for month in months %}
+  {% call card(month.title, flush=True, count=month.deadlines | length) %}
+    <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+      {%- for d in month.deadlines %}{{ deadline_row(d, today) }}{% endfor %}
+    </ul>
+  {% endcall %}
+  {%- endfor %}
+</div>
+{%- else %}
+<div class="{{ SURFACE }}">
+  {{ empty_state("calendar-clock", "No upcoming deadlines",
+                 "When a run finds a future deadline on an official page, it is listed here by month.",
+                 "Look at your sources", "/sources") }}
+</div>
+{%- endif %}
+{% endblock %}

@@ -1,0 +1,64 @@
+{# The sidebar: logo, navigation, and the last run at the bottom. The same markup is the
+   desktop sidebar and the phone drawer (drawer=True adds a close button). #}
+{% from "components/icons.html" import icon %}
+{% from "components/badges.html" import run_badge %}
+{% from "components/time.html" import rel_time %}
+
+{% set NAV = [
+  ("overview", "Overview", "/", "layout-dashboard"),
+  ("opportunities", "Opportunities", "/scholarships", "graduation-cap"),
+  ("deadlines", "Deadlines", "/deadlines", "calendar-clock"),
+  ("sources", "Sources", "/sources", "globe"),
+  ("runs", "Runs", "/runs", "activity"),
+  ("profile", "Profile", "/profile", "user"),
+] %}
+
+{% macro logo() -%}
+<a href="/" class="flex items-center gap-2.5 rounded-lg font-bold text-slate-900 dark:text-white">
+  <span class="grid size-8 place-items-center rounded-lg bg-teal-700 text-white dark:bg-teal-400 dark:text-slate-950">{{ icon("graduation-cap", "size-5") }}</span>
+  <span>Scholarship Hunter</span>
+</a>
+{%- endmacro %}
+
+{% macro sidebar(shell, active, drawer=False) -%}
+<div class="flex h-full flex-col">
+  <div class="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-5 dark:border-slate-800">
+    {{ logo() }}
+    {%- if drawer %}
+    <form method="dialog">
+      <button data-close-dialog aria-label="Close menu"
+              class="grid size-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">{{ icon("x", "size-5") }}</button>
+    </form>
+    {%- endif %}
+  </div>
+
+  <nav aria-label="Main" class="flex-1 overflow-y-auto px-3 py-4">
+    <ul class="space-y-1">
+      {%- for key, text, href, ic in NAV %}
+      <li>
+        <a href="{{ href }}"{% if key == active %} aria-current="page"{% endif %}
+           class="flex items-center gap-3 rounded-lg px-3 py-2 text-body font-semibold transition-colors
+                  {%- if key == active %} bg-teal-50 text-teal-800 dark:bg-teal-400/10 dark:text-teal-300
+                  {%- else %} text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white{% endif %}">
+          {{ icon(ic, "size-5" ~ ("" if key == active else " text-slate-500 dark:text-slate-400")) }}{{ text }}
+        </a>
+      </li>
+      {%- endfor %}
+    </ul>
+  </nav>
+
+  <div class="shrink-0 border-t border-slate-200 p-3 dark:border-slate-800">
+    <a href="/runs" class="block rounded-lg px-3 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="sidebar-last-run">
+      <span class="block text-small text-slate-600 dark:text-slate-400">Last run</span>
+      {%- if shell.last_run %}
+      <span class="mt-1 flex flex-wrap items-center gap-2 text-small">
+        {{ run_badge(shell.last_run.status) }}
+        <span class="text-slate-700 dark:text-slate-300">{{ rel_time(shell.last_run.started_at) }}</span>
+      </span>
+      {%- else %}
+      <span class="mt-1 block text-small text-slate-700 dark:text-slate-300">No runs yet</span>
+      {%- endif %}
+    </a>
+  </div>
+</div>
+{%- endmacro %}

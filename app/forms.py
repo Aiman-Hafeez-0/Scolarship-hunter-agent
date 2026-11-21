@@ -12,10 +12,9 @@ from pydantic import ValidationError
 
 from pipeline.config import Settings
 from pipeline.models import Source
-from pipeline.nodes.fetch import make_client
 from pipeline.profile import Profile
 from pipeline.ratelimit import DomainRateLimiter
-from pipeline.robots import RobotsChecker
+from pipeline.robots import RobotsChecker, make_client
 
 PROFILE_TEXT_FIELDS = [
     "full_name", "email", "nationality", "date_of_birth", "degree", "cgpa", "cgpa_scale",

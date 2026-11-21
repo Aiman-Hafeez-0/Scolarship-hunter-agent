@@ -1,15 +1,16 @@
 """The dashboard web app: HTML pages plus the same data as JSON under /api/v1.
 
 Start it with:  uv run uvicorn app.main:app --reload
+On Vercel, `app` below is found automatically (see vercel.json and the README).
 
 Only /health and /login work without logging in. Every other page and API route goes
 through `require_login` (see protected = APIRouter(...) below).
 """
 
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from itertools import groupby
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlencode
@@ -17,9 +18,10 @@ from urllib.parse import urlencode
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app import auth, github
+from app import auth, github, ui
 from app.forms import (
     parse_profile_form,
     parse_source_form,
@@ -35,15 +37,15 @@ from app.queries import (
     OPPORTUNITY_TYPES,
     DashboardStore,
     PostgresDashboardStore,
+    PostgresLoginLimiter,
     ProfileEmailTaken,
     ProfileRecord,
+    RecentChange,
     RunRow,
     ScholarshipDetail,
     ScholarshipRow,
     SourceRow,
     UpcomingDeadline,
-    days_left,
-    deadline_tone,
     filter_rows,
     match_counts,
     parse_filters,
@@ -55,28 +57,12 @@ from pipeline.notify.deadlines import PKT
 TEMPLATES = Jinja2Templates(directory=Path(__file__).resolve().parent / "templates")
 
 
-# ---------- Template helpers ----------
-
-
-def _pkt(value: datetime | None) -> str:
-    """A time shown in Pakistan time, e.g. '18 Nov 2026, 08:17 PKT'."""
-    return value.astimezone(PKT).strftime("%d %b %Y, %H:%M PKT") if value else "-"
-
-
-def _day(value: date | None) -> str:
-    return value.strftime("%d %b %Y") if value else "no date"
-
-
-def _label(value: str | None) -> str:
-    return (value or "-").replace("_", " ")
-
-
-def _as_json(value: Any) -> str:
-    return "-" if value is None else json.dumps(value, ensure_ascii=False, default=str)
-
-
-TEMPLATES.env.filters.update(pkt=_pkt, day=_day, label=_label, as_json=_as_json)
-TEMPLATES.env.globals.update(tone=deadline_tone, days_left=days_left)
+# Template helpers (see app/ui.py). The look itself is described in docs/design.md.
+TEMPLATES.env.filters.update(pkt=ui.pkt, day=ui.day, label=ui.label, as_json=ui.as_json,
+                             ago=ui.relative_time)  # fmt: skip
+TEMPLATES.env.globals.update(tone=ui.deadline_tone, days_left=ui.days_left,
+                             countdown_text=ui.countdown_text, asset=ui.asset,
+                             field_errors=ui.field_errors)  # fmt: skip
 
 
 # ---------- Dependencies ----------
@@ -110,13 +96,23 @@ def require_login(request: Request, settings: SettingsDep) -> str:
     return email
 
 
-def get_store(settings: SettingsDep) -> Iterator[DashboardStore]:
-    """One database connection per request (fine for a one-person dashboard)."""
+def _connect(settings: Settings) -> psycopg.Connection[tuple[Any, ...]]:
     if not settings.database_url:
         raise DatabaseMissing
     # connect_timeout: an unreachable database shows the error page instead of hanging.
-    with psycopg.connect(settings.database_url, autocommit=True, connect_timeout=10) as conn:
+    return psycopg.connect(settings.database_url, autocommit=True, connect_timeout=10)
+
+
+def get_store(settings: SettingsDep) -> Iterator[DashboardStore]:
+    """One database connection per request (fine for a one-person dashboard)."""
+    with _connect(settings) as conn:
         yield PostgresDashboardStore(conn)
+
+
+def get_login_limiter(settings: SettingsDep) -> Iterator[auth.LoginLimiter]:
+    """The login rate limit, kept in the database so all server instances share it."""
+    with _connect(settings) as conn:
+        yield PostgresLoginLimiter(conn)
 
 
 def get_today() -> date:
@@ -126,9 +122,39 @@ def get_today() -> date:
 UserDep = Annotated[str, Depends(require_login)]
 StoreDep = Annotated[DashboardStore, Depends(get_store)]
 TodayDep = Annotated[date, Depends(get_today)]
+LimiterDep = Annotated[auth.LoginLimiter, Depends(get_login_limiter)]
 
 
-def _client_key(request: Request) -> str:
+@dataclass
+class Shell:
+    """What the sidebar and top bar of every logged-in page show."""
+
+    user: str
+    initial: str  # the avatar letter
+    last_run: RunRow | None
+    run_now_problem: str | None  # why "Run now" cannot work yet (None: it can)
+
+
+def get_shell(user: UserDep, store: StoreDep, settings: SettingsDep) -> Shell:
+    runs = store.runs(1)
+    return Shell(user, ui.initial(user), runs[0] if runs else None,
+                 github.setup_problem(settings))  # fmt: skip
+
+
+ShellDep = Annotated[Shell, Depends(get_shell)]
+
+
+def _client_key(request: Request, settings: Settings) -> str:
+    """The visitor's IP address, for the login rate limit.
+
+    On Vercel the app sits behind Vercel's proxy, which puts the real address in
+    X-Forwarded-For (Vercel replaces any value the visitor sent, so it cannot be faked).
+    Anywhere else that header could be sent by anyone, so it is ignored.
+    """
+    if settings.vercel:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
     return request.client.host if request.client else "unknown"
 
 
@@ -136,10 +162,13 @@ def _wants_json(request: Request) -> bool:
     return request.url.path.startswith("/api/")
 
 
-def _set_cookie(request: Request, response: Response, name: str, value: str) -> None:
+def _set_cookie(
+    request: Request, response: Response, name: str, value: str, keep: bool = True
+) -> None:
+    """keep=False: no Max-Age, so the browser deletes the cookie when it closes."""
     response.set_cookie(
-        name, value, max_age=auth.SESSION_MAX_AGE_S, path="/", httponly=True, samesite="lax",
-        secure=not auth.is_local(request.url.hostname),
+        name, value, max_age=auth.SESSION_MAX_AGE_S if keep else None, path="/", httponly=True,
+        samesite="lax", secure=not auth.is_local(request.url.hostname),
     )  # fmt: skip
 
 
@@ -188,7 +217,8 @@ CsrfDep = Depends(check_csrf)
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Scholarship Hunter", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings or Settings()
-    app.state.login_limiter = auth.LoginRateLimiter()
+    # The built CSS, app.js and htmx (no login needed: they hold no data).
+    app.mount("/static", StaticFiles(directory=ui.STATIC_DIR), name="static")
 
     @app.exception_handler(NotLoggedIn)
     async def not_logged_in(request: Request, exc: NotLoggedIn) -> Response:
@@ -242,26 +272,34 @@ def login_page(request: Request, settings: SettingsDep, next: str = "/") -> Resp
     if auth.read_session(settings, request.cookies.get(auth.SESSION_COOKIE)):
         return RedirectResponse(_safe_next(next), status_code=303)
     return render(request, "login.html", {"next": _safe_next(next), "error": None,
-                                          "setup": auth.setup_problems(settings)})  # fmt: skip
+                                          "setup": auth.setup_problems(settings),
+                                          "remember": True})  # fmt: skip
+
+
+def too_many_tries(retry_after_s: int) -> str:
+    minutes = -(-retry_after_s // 60)
+    return f"Too many tries. Wait {minutes} minute{'' if minutes == 1 else 's'} and try again."
 
 
 @public.post("/login", response_class=HTMLResponse)
 async def login(
     request: Request,
     settings: SettingsDep,
+    limiter: LimiterDep,
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "/",
+    remember: Annotated[str, Form()] = "",
 ) -> Response:
-    limiter: auth.LoginRateLimiter = request.app.state.login_limiter
-    key = _client_key(request)
+    key = _client_key(request, settings)
+    keep = remember in ("1", "on")
     context: dict[str, Any] = {"next": _safe_next(next), "setup": auth.setup_problems(settings),
-                               "email": email}  # fmt: skip
-    if limiter.blocked(key):
-        minutes = -(-limiter.retry_after_s(key) // 60)
-        error = f"Too many failed logins. Try again in {minutes} minute(s)."
+                               "email": email, "remember": keep}  # fmt: skip
+    retry_after = limiter.retry_after_s(key)
+    if retry_after > 0:
+        error = too_many_tries(retry_after)
         response: Response = render(request, "login.html", {**context, "error": error}, 429)
-        response.headers["Retry-After"] = str(limiter.retry_after_s(key))
+        response.headers["Retry-After"] = str(retry_after)
         return response
     await check_csrf(request, settings)  # a rejected form does not count as a login try
     if not auth.check_login(settings, email, password):
@@ -270,7 +308,8 @@ async def login(
 
     limiter.reset(key)
     response = RedirectResponse(_safe_next(next), status_code=303)
-    _set_cookie(request, response, auth.SESSION_COOKIE, auth.make_session(settings, email.strip()))
+    session = auth.make_session(settings, email.strip(), remember=keep)
+    _set_cookie(request, response, auth.SESSION_COOKIE, session, keep=keep)
     token = auth.new_csrf_token()  # a fresh CSRF token for the logged-in session
     _set_cookie(request, response, auth.CSRF_COOKIE, auth.sign_csrf(settings, token))
     return response
@@ -286,27 +325,58 @@ def logout() -> Response:
 # ---------- Data shared by pages and JSON ----------
 
 
+UPCOMING_ON_OVERVIEW = 10
+SOON_DAYS = 14  # the "Deadlines in the next 14 days" card
+LIST_ON_OVERVIEW = 5  # rows in "Recently changed" and "Needs review"
+DEADLINES_PAGE_LIMIT = 300
+
+
 @dataclass
 class HomeSummary:
     match_counts: dict[str, int]
-    upcoming: list[UpcomingDeadline]
+    upcoming: list[UpcomingDeadline]  # the next 10
+    deadlines_soon: int  # deadlines in the next SOON_DAYS days (today included)
+    recent_changes: list[RecentChange]
+    needs_review: list[ScholarshipRow]  # open items that failed a check, soonest first
+    needs_review_total: int
     last_run: RunRow | None
     last_good_run_at: datetime | None
     run_overdue: bool  # no successful weekly run in the last 8 days
 
 
 def home_summary(store: DashboardStore, email: str, today: date) -> HomeSummary:
-    profile_id = store.profile_id(email)
+    rows = store.scholarship_rows(store.profile_id(email), today)
     runs = store.runs(1)
     last_good = store.last_good_weekly_at()
     overdue = last_good is None or datetime.now(PKT) - last_good > WEEKLY_MAX_AGE
+    upcoming = store.upcoming_deadlines(today, DEADLINES_PAGE_LIMIT)
+    soon_until = today + timedelta(days=SOON_DAYS)
+    review = filter_rows([r for r in rows if r.needs_review], parse_filters({}))
     return HomeSummary(
-        match_counts=match_counts(store.scholarship_rows(profile_id, today)),
-        upcoming=store.upcoming_deadlines(today, 5),
+        match_counts=match_counts(rows),
+        upcoming=upcoming[:UPCOMING_ON_OVERVIEW],
+        deadlines_soon=sum(1 for d in upcoming if d.deadline_date <= soon_until),
+        recent_changes=store.recent_changes(LIST_ON_OVERVIEW),
+        needs_review=review[:LIST_ON_OVERVIEW],
+        needs_review_total=len(review),
         last_run=runs[0] if runs else None,
         last_good_run_at=last_good,
         run_overdue=overdue,
     )
+
+
+@dataclass
+class MonthGroup:
+    title: str  # "January 2027"
+    deadlines: list[UpcomingDeadline]
+
+
+def by_month(deadlines: list[UpcomingDeadline]) -> list[MonthGroup]:
+    """Deadlines (already sorted by date) in groups, one per calendar month."""
+    return [
+        MonthGroup(month.strftime("%B %Y"), list(items))
+        for month, items in groupby(deadlines, key=lambda d: d.deadline_date.replace(day=1))
+    ]
 
 
 def scholarship_list(
@@ -332,16 +402,21 @@ FILTER_CHOICES = {
 
 
 @protected.get("/", response_class=HTMLResponse)
-def home(request: Request, user: UserDep, store: StoreDep, today: TodayDep) -> Response:
+def home(
+    request: Request, user: UserDep, store: StoreDep, today: TodayDep, shell: ShellDep
+) -> Response:
     summary = home_summary(store, user, today)
-    return render(request, "home.html", {"s": summary, "today": today, "user": user})
+    return render(request, "home.html", {"s": summary, "today": today, "shell": shell,
+                                         "soon_days": SOON_DAYS})  # fmt: skip
 
 
 @protected.get("/scholarships", response_class=HTMLResponse)
-def scholarships(request: Request, user: UserDep, store: StoreDep, today: TodayDep) -> Response:
+def scholarships(
+    request: Request, user: UserDep, store: StoreDep, today: TodayDep, shell: ShellDep
+) -> Response:
     filters = parse_filters(request.query_params)
     rows = scholarship_list(request, store, user, today)
-    context = {"rows": rows, "f": filters, "today": today, "user": user, **FILTER_CHOICES}
+    context = {"rows": rows, "f": filters, "today": today, "shell": shell, **FILTER_CHOICES}
     return render(request, "scholarships.html", context)
 
 
@@ -360,23 +435,33 @@ def scholarships_table(
 
 @protected.get("/scholarships/{sid}", response_class=HTMLResponse)
 def scholarship_page(request: Request, sid: str, user: UserDep, store: StoreDep,
-                     today: TodayDep) -> Response:  # fmt: skip
+                     today: TodayDep, shell: ShellDep) -> Response:  # fmt: skip
     detail = find_scholarship(store, user, sid)
     if detail is None:
         context = {"title": "Not found", "message": "There is no scholarship with this id.",
-                   "user": user}  # fmt: skip
+                   "shell": shell}  # fmt: skip
         return render(request, "error.html", context, 404)
-    return render(request, "detail.html", {"d": detail, "today": today, "user": user})
+    return render(request, "detail.html", {"d": detail, "today": today, "shell": shell})
+
+
+@protected.get("/deadlines", response_class=HTMLResponse)
+def deadlines_page(
+    request: Request, store: StoreDep, today: TodayDep, shell: ShellDep
+) -> Response:
+    """Every upcoming deadline of an open item, grouped by month."""
+    upcoming = store.upcoming_deadlines(today, DEADLINES_PAGE_LIMIT)
+    return render(request, "deadlines.html", {"months": by_month(upcoming), "today": today,
+                                              "total": len(upcoming), "shell": shell})  # fmt: skip
 
 
 @protected.get("/runs", response_class=HTMLResponse)
-def runs_page(request: Request, user: UserDep, store: StoreDep, settings: SettingsDep) -> Response:
-    return render(request, "runs.html", runs_context(store, user, settings))
+def runs_page(request: Request, store: StoreDep, shell: ShellDep) -> Response:
+    return render(request, "runs.html", runs_context(store, shell))
 
 
-def runs_context(store: DashboardStore, user: str, settings: Settings) -> dict[str, Any]:
-    return {"runs": store.runs(100), "user": user, "dispatch": None,
-            "github_problem": github.setup_problem(settings)}  # fmt: skip
+def runs_context(store: DashboardStore, shell: Shell) -> dict[str, Any]:
+    return {"runs": store.runs(100), "shell": shell, "dispatch": None,
+            "github_problem": shell.run_now_problem}  # fmt: skip
 
 
 # ---------- Actions (POST: they all need the CSRF token) ----------
@@ -402,15 +487,17 @@ def verify_scholarship(request: Request, sid: str, user: UserDep, store: StoreDe
     return render(request, "_verify.html", {"sid": sid, "verified_at": verified_at})
 
 
-def sources_context(store: DashboardStore, user: str, **extra: Any) -> dict[str, Any]:
-    context: dict[str, Any] = {"sources": store.sources(), "user": user, "values": {},
-                               "errors": [], "added": None, "added_yaml": ""}  # fmt: skip
+def sources_context(store: DashboardStore, shell: Shell, **extra: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {"sources": store.sources(), "shell": shell, "values": {},
+                               "errors": [], "added": None, "added_yaml": "",
+                               "open_add": False}  # fmt: skip
     return context | extra
 
 
 @protected.get("/sources", response_class=HTMLResponse)
-def sources_page(request: Request, user: UserDep, store: StoreDep) -> Response:
-    return render(request, "sources.html", sources_context(store, user))
+def sources_page(request: Request, store: StoreDep, shell: ShellDep, add: str = "") -> Response:
+    """?add=1 opens the "Add source" panel straight away (the Overview's quick action)."""
+    return render(request, "sources.html", sources_context(store, shell, open_add=add == "1"))
 
 
 @protected.post("/sources/{key}/active", dependencies=[CsrfDep])
@@ -426,7 +513,7 @@ async def toggle_source(request: Request, key: str, user: UserDep, store: StoreD
 
 @protected.post("/sources", response_class=HTMLResponse, dependencies=[CsrfDep])
 async def add_source(
-    request: Request, user: UserDep, store: StoreDep, settings: SettingsDep
+    request: Request, store: StoreDep, settings: SettingsDep, shell: ShellDep
 ) -> Response:
     """Check the new page (https, robots.txt) and save it. The next run picks it up."""
     values = await _form(request)
@@ -439,9 +526,9 @@ async def add_source(
     elif source is not None and not store.add_source(source):
         errors = [f"A source with key '{source.key}' or this URL already exists."]
     if errors or source is None:
-        context = sources_context(store, user, values=values, errors=errors)
+        context = sources_context(store, shell, values=values, errors=errors, open_add=True)
         return render(request, "sources.html", context, 400)
-    context = sources_context(store, user, added=source, added_yaml=source_yaml(source))
+    context = sources_context(store, shell, added=source, added_yaml=source_yaml(source))
     return render(request, "sources.html", context)
 
 
@@ -451,17 +538,19 @@ def profile_context(store: DashboardStore, user: str) -> tuple[str | None, Profi
 
 
 @protected.get("/profile", response_class=HTMLResponse)
-def profile_page(request: Request, user: UserDep, store: StoreDep) -> Response:
+def profile_page(request: Request, user: UserDep, store: StoreDep, shell: ShellDep) -> Response:
     _, record = profile_context(store, user)
     values = profile_form_values(record.profile if record else None,
                                  record.emails_paused if record else False)  # fmt: skip
     saved = request.query_params.get("saved") == "1"
     return render(request, "profile.html", {"values": values, "errors": [], "saved": saved,
-                                            "user": user, "is_new": record is None})  # fmt: skip
+                                            "shell": shell, "is_new": record is None})  # fmt: skip
 
 
 @protected.post("/profile", response_class=HTMLResponse, dependencies=[CsrfDep])
-async def save_profile(request: Request, user: UserDep, store: StoreDep) -> Response:
+async def save_profile(
+    request: Request, user: UserDep, store: StoreDep, shell: ShellDep
+) -> Response:
     form = await _form(request)
     profile, paused, errors = parse_profile_form(form)
     profile_id, record = profile_context(store, user)
@@ -472,20 +561,21 @@ async def save_profile(request: Request, user: UserDep, store: StoreDep) -> Resp
             errors = [f"email: another profile already uses {profile.email}"]
         else:
             return RedirectResponse("/profile?saved=1", status_code=303)
-    context = {"values": form, "errors": errors, "saved": False, "user": user,
+    context = {"values": form, "errors": errors, "saved": False, "shell": shell,
                "is_new": record is None}  # fmt: skip
     return render(request, "profile.html", context, 400)
 
 
 @protected.post("/runs/dispatch", response_class=HTMLResponse, dependencies=[CsrfDep])
 async def run_now(
-    request: Request, user: UserDep, store: StoreDep, settings: SettingsDep
+    request: Request, store: StoreDep, settings: SettingsDep, shell: ShellDep
 ) -> Response:
-    """Start weekly.yml on GitHub. Answers 200 even when GitHub refused, so HTMX shows why."""
+    """Start weekly.yml on GitHub. Answers 200 even when GitHub refused, so HTMX shows why
+    (as a toast, from any page's "Run now" button)."""
     result = await github.dispatch_weekly(settings)
     if _is_htmx(request):
         return render(request, "_dispatch.html", {"r": result})
-    context = runs_context(store, user, settings) | {"dispatch": result}
+    context = runs_context(store, shell) | {"dispatch": result}
     return render(request, "runs.html", context)
 
 

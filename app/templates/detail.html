@@ -1,123 +1,133 @@
 {% extends "base.html" %}
-{% from "_macros.html" import days_badge, match_badge, review_badge, quote_box, verify_box %}
-{% block title %}{{ d.name }} · Scholarship Hunter{% endblock %}
+{% from "components/icons.html" import icon %}
+{% from "components/badges.html" import badge, countdown, match_badge, review_badge, closed_badge %}
+{% from "components/buttons.html" import link_button %}
+{% from "components/cards.html" import card, callout %}
+{% from "components/time.html" import rel_time %}
+{% from "_parts.html" import quote_box, verify_box %}
+{% set active = "opportunities" %}
+{% set title = d.name %}
+{% set crumbs = [("Opportunities", "/scholarships")] %}
+{% set OUTCOME = {"pass": "green", "fail": "red"} %}
 {% block content %}
-<p class="mb-2 text-sm"><a href="/scholarships" class="text-indigo-700 hover:underline">← All scholarships</a></p>
-
-<header class="mb-6">
-  <h1 class="text-2xl font-semibold break-words">{{ d.name }}</h1>
-  <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
-    {% if d.needs_review %}{{ review_badge() }}{% endif %}
+<section aria-label="Summary" class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+  <div class="min-w-0 space-y-3">
+    <div class="flex flex-wrap items-center gap-2">
+      {%- if d.match %}{{ match_badge(d.match.status) }}<span class="text-small tabular-nums text-slate-700 dark:text-slate-300">score <span class="font-bold">{{ d.match.score }}</span>/100</span>{% else %}{{ match_badge(none) }}{% endif %}
+      {%- if d.status == 'closed' %}{{ closed_badge() }}{% endif %}
+      {%- if d.needs_review %}{{ review_badge() }}{% endif %}
+    </div>
     {{ verify_box(d.id, d.verified_at, csrf_token) }}
-    {% if d.match %}{{ match_badge(d.match.status) }} <span>score {{ d.match.score }}</span>{% else %}{{ match_badge(none) }}{% endif %}
+    <p class="text-small font-normal text-slate-600 dark:text-slate-400">
+      Source: <a href="{{ d.source_url }}" target="_blank" rel="noopener noreferrer" class="font-semibold break-all text-teal-700 hover:underline dark:text-teal-400">{{ d.source_name }}</a>
+      · read from the page {{ rel_time(d.extracted_at) }}{% if d.extraction_version %} <span class="break-all">({{ d.extraction_version }})</span>{% endif %}
+    </p>
   </div>
-  <p class="mt-2 text-sm text-slate-600">
-    Source: <a href="{{ d.source_url }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:underline break-all">{{ d.source_name }}</a>
-    {% if d.application_url %} · <a href="{{ d.application_url }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:underline">Apply / official page</a>{% endif %}
-  </p>
-  <p class="text-xs text-slate-500">Read from the page {{ d.extracted_at | pkt }}{% if d.extraction_version %} ({{ d.extraction_version }}){% endif %}</p>
-</header>
-
-{% if d.needs_review and d.review_notes %}
-<section class="mb-6 rounded border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
-  <h2 class="font-semibold">Why this needs review</h2>
-  <ul class="list-disc ml-5">{% for note in d.review_notes %}<li>{{ note }}</li>{% endfor %}</ul>
+  {%- if d.application_url %}
+  <div class="shrink-0">{{ link_button("Apply / official page", d.application_url, "primary", "md", None, external=True) }}</div>
+  {%- endif %}
 </section>
-{% endif %}
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-  <div class="lg:col-span-2 space-y-6">
-    <section class="bg-white rounded-lg border border-slate-200 p-4">
-      <h2 class="font-semibold mb-3">Deadlines</h2>
-      {% if d.deadlines %}
-      <ul class="divide-y divide-slate-100">
-        {% for dl in d.deadlines %}
-        <li class="py-3">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="font-medium">{{ dl.label }}</span>
-            <span>{{ dl.deadline_date | day }}</span>
-            {% if dl.deadline_date and dl.deadline_date >= today %}{{ days_badge(dl.deadline_date, today) }}{% elif dl.deadline_date %}<span class="text-xs text-slate-500">passed</span>{% endif %}
-            {% if dl.is_estimated %}<span class="text-xs text-slate-500">(estimated)</span>{% endif %}
+{%- if d.needs_review and d.review_notes %}
+{% call callout("warning", cls="mb-6") %}
+  <h2 class="font-semibold">Why this needs review</h2>
+  <ul class="mt-1 list-disc pl-5">{% for note in d.review_notes %}<li>{{ note }}</li>{% endfor %}</ul>
+{% endcall %}
+{%- endif %}
+
+<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+  <div class="min-w-0 space-y-6 lg:col-span-2">
+    {% call card("Deadlines", flush=True) %}
+      {%- if d.deadlines %}
+      <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+        {%- for dl in d.deadlines %}
+        <li class="px-4 py-3 sm:px-5">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-semibold text-slate-900 dark:text-white">{{ dl.label }}</span>
+            <span class="tabular-nums text-slate-700 dark:text-slate-300">{{ dl.deadline_date | day }}</span>
+            {%- if dl.deadline_date and dl.deadline_date >= today %}{{ countdown(dl.deadline_date, today) }}
+            {%- elif dl.deadline_date %}{{ badge("passed", "gray", "passed") }}{% endif %}
+            {%- if dl.is_estimated %}<span class="text-small font-normal text-slate-600 dark:text-slate-400">(estimated)</span>{% endif %}
           </div>
-          {% if dl.timezone_note %}<div class="text-sm text-slate-600">{{ dl.timezone_note }}</div>{% endif %}
-          {% if dl.quote %}{{ quote_box(dl.quote) }}{% else %}<div class="text-xs text-slate-500 mt-1">no quote saved</div>{% endif %}
+          {%- if dl.timezone_note %}<p class="mt-0.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ dl.timezone_note }}</p>{% endif %}
+          {%- if dl.quote %}{{ quote_box(dl.quote) }}{% else %}<p class="mt-1 text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
         </li>
-        {% endfor %}
+        {%- endfor %}
       </ul>
-      {% else %}<p class="text-sm text-slate-600">No deadlines found on the page.</p>{% endif %}
-    </section>
+      {%- else %}<p class="border-t border-slate-100 px-4 py-4 text-body text-slate-600 sm:px-5 dark:border-slate-800 dark:text-slate-400">No deadlines found on the page.</p>{% endif %}
+    {% endcall %}
 
-    <section class="bg-white rounded-lg border border-slate-200 p-4">
-      <h2 class="font-semibold mb-3">Details</h2>
-      <dl class="divide-y divide-slate-100">
-        {% for field in d.fields %}
-        <div class="py-2 grid grid-cols-1 sm:grid-cols-3 gap-1">
-          <dt class="text-sm text-slate-600">{{ field.label }}</dt>
-          <dd class="sm:col-span-2 text-sm">
-            {% if field.value %}{{ field.value | label if field.label in ('Type', 'Funding', 'Location', 'Status') else field.value }}{% else %}<span class="text-slate-400">not stated</span>{% endif %}
-            {% for q in field.quotes %}{{ quote_box(q) }}{% endfor %}
-            {% if field.value and field.has_evidence and not field.quotes %}<div class="text-xs text-slate-500">no quote saved</div>{% endif %}
+    {% call card("Details", flush=True) %}
+      <dl class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+        {%- for field in d.fields %}
+        <div class="grid grid-cols-1 gap-1 px-4 py-3 sm:grid-cols-3 sm:gap-4 sm:px-5">
+          <dt class="text-small text-slate-600 dark:text-slate-400">{{ field.label }}</dt>
+          <dd class="min-w-0 text-body break-words text-slate-900 sm:col-span-2 dark:text-slate-100">
+            {%- if field.value %}{{ field.value | label | capitalize if field.label in ('Type', 'Funding', 'Location', 'Status') else field.value }}
+            {%- else %}<span class="text-slate-600 dark:text-slate-400">not stated</span>{% endif %}
+            {%- for q in field.quotes %}{{ quote_box(q) }}{% endfor %}
+            {%- if field.value and field.has_evidence and not field.quotes %}<p class="text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
           </dd>
         </div>
-        {% endfor %}
+        {%- endfor %}
       </dl>
-    </section>
+    {% endcall %}
 
-    <section class="bg-white rounded-lg border border-slate-200 p-4">
-      <h2 class="font-semibold mb-3">Requirements</h2>
-      {% if d.requirements %}
-      <ul class="divide-y divide-slate-100">
-        {% for r in d.requirements %}
-        <li class="py-2 text-sm">
-          <span class="font-medium">{{ r.kind | label }}</span>{% if r.value %}: {{ r.value }}{% endif %}
-          {% if r.description %}<div class="text-slate-600">{{ r.description }}</div>{% endif %}
-          {% if r.quote %}{{ quote_box(r.quote) }}{% else %}<div class="text-xs text-slate-500">no quote saved</div>{% endif %}
+    {% call card("Requirements", flush=True) %}
+      {%- if d.requirements %}
+      <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+        {%- for r in d.requirements %}
+        <li class="px-4 py-3 text-body sm:px-5">
+          <span class="font-semibold text-slate-900 dark:text-white">{{ r.kind | label | capitalize }}</span>{% if r.value %}: {{ r.value }}{% endif %}
+          {%- if r.description %}<p class="text-slate-700 dark:text-slate-300">{{ r.description }}</p>{% endif %}
+          {%- if r.quote %}{{ quote_box(r.quote) }}{% else %}<p class="mt-1 text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
         </li>
-        {% endfor %}
+        {%- endfor %}
       </ul>
-      {% else %}<p class="text-sm text-slate-600">No requirements found on the page.</p>{% endif %}
-      {% if d.documents %}
-      <h3 class="font-medium mt-4 mb-1 text-sm">Documents to prepare</h3>
-      <ul class="list-disc ml-5 text-sm">{% for doc in d.documents %}<li>{{ doc }}</li>{% endfor %}</ul>
-      {% endif %}
-    </section>
+      {%- else %}<p class="border-t border-slate-100 px-4 py-4 text-body text-slate-600 sm:px-5 dark:border-slate-800 dark:text-slate-400">No requirements found on the page.</p>{% endif %}
+      {%- if d.documents %}
+      <div class="border-t border-slate-100 px-4 py-4 sm:px-5 dark:border-slate-800">
+        <h3 class="text-small text-slate-800 dark:text-slate-200">Documents to prepare</h3>
+        <ul class="mt-2 space-y-1.5">
+          {%- for doc in d.documents %}<li class="flex items-center gap-2 text-body">{{ icon("file-text", "size-4 text-slate-500 dark:text-slate-400") }}{{ doc }}</li>{% endfor %}
+        </ul>
+      </div>
+      {%- endif %}
+    {% endcall %}
   </div>
 
-  <div class="space-y-6">
-    <section class="bg-white rounded-lg border border-slate-200 p-4">
-      <h2 class="font-semibold mb-3">Why this match</h2>
-      {% if d.match and d.match.reasons %}
-      <ul class="space-y-3 text-sm">
-        {% for r in d.match.reasons %}
+  <div class="min-w-0 space-y-6">
+    {% call card("Why this match") %}
+      {%- if d.match and d.match.reasons %}
+      <ul class="space-y-4">
+        {%- for r in d.match.reasons %}
         <li>
           <div class="flex items-center gap-2">
-            <span class="inline-block rounded px-1.5 text-xs font-medium
-              {% if r.outcome == 'pass' %}bg-green-100 text-green-800{% elif r.outcome == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-700{% endif %}">{{ r.outcome }}</span>
-            <span class="font-medium">{{ r.rule | label }}</span>
+            {{ badge(r.outcome, OUTCOME.get(r.outcome, "gray"), "outcome") }}
+            <span class="font-semibold text-slate-900 dark:text-white">{{ r.rule | label | capitalize }}</span>
           </div>
-          <div class="text-slate-700">{{ r.reason }}</div>
-          {% if r.action %}<div class="text-indigo-800">→ {{ r.action }}</div>{% endif %}
+          <p class="mt-1 text-body text-slate-700 dark:text-slate-300">{{ r.reason }}</p>
+          {%- if r.action %}<p class="mt-1 flex items-start gap-1.5 text-body font-semibold text-teal-800 dark:text-teal-300">{{ icon("arrow-right", "mt-1 size-4") }}{{ r.action }}</p>{% endif %}
         </li>
-        {% endfor %}
+        {%- endfor %}
       </ul>
-      <p class="mt-3 text-xs text-slate-500">Matched {{ d.match.computed_at | pkt }}</p>
-      {% else %}<p class="text-sm text-slate-600">Not matched against your profile yet.</p>{% endif %}
-    </section>
+      <p class="mt-4 text-small font-normal text-slate-600 dark:text-slate-400">Matched {{ rel_time(d.match.computed_at) }}</p>
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">Not matched against your profile yet. The next run does it.</p>{% endif %}
+    {% endcall %}
 
-    <section class="bg-white rounded-lg border border-slate-200 p-4">
-      <h2 class="font-semibold mb-3">Change history</h2>
-      {% if d.changes %}
-      <ul class="space-y-3 text-sm">
-        {% for c in d.changes %}
-        <li>
-          <div class="text-xs text-slate-500">{{ c.detected_at | pkt }}</div>
-          <div class="font-medium">{{ c.field_path | label }}</div>
-          <div class="break-words"><span class="text-red-700 line-through">{{ c.old_value | as_json }}</span> → <span class="text-green-800">{{ c.new_value | as_json }}</span></div>
+    {% call card("Change history") %}
+      {%- if d.changes %}
+      <ol class="space-y-4">
+        {%- for c in d.changes %}
+        <li class="border-l-2 border-slate-200 pl-3 dark:border-slate-700">
+          <p class="text-small font-normal text-slate-600 dark:text-slate-400">{{ rel_time(c.detected_at) }}</p>
+          <p class="font-semibold text-slate-900 dark:text-white">{{ c.field_path | label | capitalize }}</p>
+          <p class="text-body break-words"><span class="text-red-800 line-through dark:text-red-300">{{ c.old_value | as_json }}</span> → <span class="text-green-800 dark:text-green-300">{{ c.new_value | as_json }}</span></p>
         </li>
-        {% endfor %}
-      </ul>
-      {% else %}<p class="text-sm text-slate-600">No changes seen since it was first saved.</p>{% endif %}
-    </section>
+        {%- endfor %}
+      </ol>
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">No changes seen since it was first saved.</p>{% endif %}
+    {% endcall %}
   </div>
 </div>
 {% endblock %}

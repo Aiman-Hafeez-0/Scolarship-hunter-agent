@@ -31,7 +31,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
-        run: uv sync --locked --no-dev
+        run: uv sync --locked --no-dev --group pipeline
 
       - name: Send a test email
-        run: uv run --no-dev python -m pipeline.run test-email
+        run: uv run --no-dev --group pipeline python -m pipeline.run test-email

@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     run_now_github_repo: str = ""  # "owner/name"
     run_now_github_ref: str = "main"  # the branch whose weekly.yml is run
 
+    # Vercel sets VERCEL=1 on its servers. The dashboard then trusts Vercel's X-Forwarded-For
+    # header for the visitor's IP address (used by the login rate limit).
+    vercel: bool = False
+
     sources_file: Path = Path("pipeline/sources.yaml")
     profile_file: Path = Path("profile.yaml")
     data_dir: Path = Path("data")
