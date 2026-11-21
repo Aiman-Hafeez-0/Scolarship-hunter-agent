@@ -107,6 +107,35 @@ def parse_source_form(form: Mapping[str, str]) -> tuple[Source | None, list[str]
         return None, _problems(exc)
 
 
+LIVE_SOURCE_FIELDS = ["url", "name", "key", "program_key", "country", "note"]
+
+
+def live_source_errors(
+    form: Mapping[str, str], existing: list[tuple[str, str]]
+) -> dict[str, str]:
+    """Problems to show under each "Add source" field while you type (one per field).
+
+    Only fields that already have something in them are checked: an empty box is not an
+    error until you press "Check and save". `existing` holds the (key, url) of every saved
+    source, so a duplicate is caught before saving. robots.txt is only checked on save.
+    """
+    _, problems = parse_source_form(form)
+    found: dict[str, str] = {}
+    for line in problems:
+        name, _, message = line.partition(": ")
+        if name in LIVE_SOURCE_FIELDS and name not in found:
+            if "should match pattern" in message:  # Pydantic's words for a bad slug
+                message = "use lowercase letters, digits and dashes, e.g. example-uni-ms"
+            found[name] = message
+    key, url = form.get("key", "").strip(), form.get("url", "").strip()
+    if key and any(key == k for k, _ in existing):
+        found.setdefault("key", "a source with this key already exists")
+    if url and any(url == u for _, u in existing):
+        found.setdefault("url", "this page is already a source")
+    return {name: found.get(name, "") if form.get(name, "").strip() else ""
+            for name in LIVE_SOURCE_FIELDS}  # fmt: skip
+
+
 async def robots_allows(url: str, settings: Settings) -> bool:
     """True if the site's robots.txt lets our bot fetch this url (same rules as the pipeline:
     no robots.txt (4xx) allows everything; an unreachable site allows nothing)."""

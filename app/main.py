@@ -7,6 +7,7 @@ Only /health and /login work without logging in. Every other page and API route 
 through `require_login` (see protected = APIRouter(...) below).
 """
 
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -16,6 +17,7 @@ from urllib.parse import urlencode
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, Form, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -25,10 +27,12 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth, github, ics, ui
 from app.deadline_views import month_view, parse_month, week_groups
 from app.forms import (
+    live_source_errors,
     parse_profile_form,
     parse_source_form,
     profile_form_values,
@@ -60,6 +64,7 @@ from pipeline.notify.alerts import WEEKLY_MAX_AGE
 from pipeline.notify.deadlines import PKT
 
 TEMPLATES = Jinja2Templates(directory=Path(__file__).resolve().parent / "templates")
+logger = logging.getLogger(__name__)
 
 
 # Template helpers (see app/ui.py). The look itself is described in docs/design.md.
@@ -68,7 +73,8 @@ TEMPLATES.env.filters.update(pkt=ui.pkt, day=ui.day, label=ui.label, as_json=ui.
 TEMPLATES.env.globals.update(tone=ui.deadline_tone, days_left=ui.days_left,
                              countdown_text=ui.countdown_text, asset=ui.asset,
                              field_errors=ui.field_errors, funding_text=ui.funding_text,
-                             quote_link=ui.quote_link)  # fmt: skip
+                             quote_link=ui.quote_link, source_health=ui.source_health,
+                             health_text=ui.HEALTH_TEXT, duration=ui.duration)  # fmt: skip
 
 
 # ---------- Dependencies ----------
@@ -240,13 +246,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         message = "This form expired or did not come from this site. Reload the page and try again."
         if _wants_json(request) or request.headers.get("hx-request"):
             return JSONResponse({"detail": message}, status_code=403)
-        return render(request, "error.html", {"title": "Form rejected", "message": message}, 403)
+        return render(request, "error.html", {"title": "Form rejected", "message": message,
+                                              "code": 403}, 403)  # fmt: skip
 
     async def database_problem(request: Request, message: str) -> Response:
         if _wants_json(request):
             return JSONResponse({"detail": message}, status_code=503)
-        return render(request, "error.html", {"title": "Database problem", "message": message},
-                      503)  # fmt: skip
+        return render(request, "error.html", {"title": "Database problem", "message": message,
+                                              "code": 503}, 503)  # fmt: skip
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
+        """A friendly page for an unknown address; everything else as FastAPI does it."""
+        if exc.status_code != 404 or _wants_json(request):
+            return await http_exception_handler(request, exc)
+        message = "This page does not exist. The link may be old, or the address mistyped."
+        return render(request, "error.html", {"title": "Page not found", "message": message,
+                                              "code": 404}, 404)  # fmt: skip
+
+    @app.exception_handler(Exception)
+    async def server_error(request: Request, exc: Exception) -> Response:
+        """Any bug: log it, and show a calm page without the details (they may hold secrets)."""
+        logger.exception("Unhandled error on %s", request.url.path)
+        message = "Something went wrong on our side. Try again in a minute."
+        if _wants_json(request):
+            return JSONResponse({"detail": message}, status_code=500)
+        return render(request, "error.html", {"title": "Something went wrong",
+                                              "message": message, "code": 500}, 500)  # fmt: skip
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return RedirectResponse(ui.asset("favicon.svg"), status_code=301)
 
     @app.exception_handler(DatabaseMissing)
     async def database_missing(request: Request, exc: DatabaseMissing) -> Response:
@@ -443,7 +473,7 @@ def scholarship_page(request: Request, sid: str, user: UserDep, store: StoreDep,
     detail = find_scholarship(store, user, sid)
     if detail is None:
         context = {"title": "Not found", "message": "There is no scholarship with this id.",
-                   "shell": shell}  # fmt: skip
+                   "shell": shell, "code": 404}  # fmt: skip
         return render(request, "error.html", context, 404)
     rows = store.scholarship_rows(store.profile_id(user), today)
     context = {"d": detail, "today": today, "shell": shell, "sources": sources_of(rows, sid)}
@@ -545,6 +575,15 @@ async def toggle_source(request: Request, key: str, user: UserDep, store: StoreD
     if not _is_htmx(request):
         return RedirectResponse("/sources", status_code=303)
     return render(request, "_source_card.html", {"s": source})
+
+
+@protected.post("/sources/validate", response_class=HTMLResponse, dependencies=[CsrfDep])
+async def validate_source(request: Request, store: StoreDep) -> Response:
+    """Live checks while you fill in "Add source": one error line per field (HTMX swaps
+    them in place, out of band). Nothing is saved and no website is contacted."""
+    existing = [(s.key, s.url) for s in store.sources()]
+    errors = live_source_errors(await _form(request), existing)
+    return render(request, "_source_errors.html", {"errors": errors})
 
 
 @protected.post("/sources", response_class=HTMLResponse, dependencies=[CsrfDep])

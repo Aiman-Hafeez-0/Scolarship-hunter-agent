@@ -110,43 +110,76 @@
 </li>
 {%- endmacro %}
 
-{# One source as a card, with its on/off switch. The switch's answer replaces the card. #}
-{% macro source_card(s, csrf_token) -%}
-<li id="source-{{ s.key }}" class="flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5 dark:border-slate-800 dark:bg-slate-900{% if not s.active %} opacity-75{% endif %}">
+{# The health dot of a source: green working, red failing, gray paused or not fetched yet.
+   The color always comes with words (shown next to it, or for screen readers). #}
+{% macro health_dot(s, show_text=False) -%}
+{%- set h = source_health(s.active, s.consecutive_failures, s.robots_allowed, s.last_fetched_at is not none) -%}
+<span class="inline-flex items-center gap-2" data-health="{{ h }}" title="{{ health_text[h] }}">
+  <span aria-hidden="true" class="relative inline-flex size-2.5 rounded-full {{ {'ok': 'bg-green-600 dark:bg-green-400', 'failing': 'bg-red-600 dark:bg-red-400', 'paused': 'bg-slate-400 dark:bg-slate-500', 'new': 'bg-slate-300 ring-2 ring-inset ring-slate-400 dark:bg-slate-700 dark:ring-slate-500'}[h] }}">
+    {%- if h == 'failing' %}<span class="absolute inset-0 animate-ping rounded-full bg-red-500 opacity-40 motion-reduce:hidden"></span>{% endif -%}
+  </span>
+  <span class="{{ 'text-small text-slate-700 dark:text-slate-300' if show_text else 'sr-only' }}">{{ health_text[h] }}</span>
+</span>
+{%- endmacro %}
+
+{# The on/off switch of a source. Its answer replaces the table row and (out of band) the
+   phone card, so both always agree. #}
+{% macro source_switch(s, csrf_token) -%}
+<form method="post" action="/sources/{{ s.key }}/active"
+      hx-post="/sources/{{ s.key }}/active" hx-target="#source-{{ s.key }}" hx-swap="outerHTML"
+      hx-disabled-elt="find button">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="active" value="{{ '0' if s.active else '1' }}">
+  <button role="switch" aria-checked="{{ 'true' if s.active else 'false' }}" aria-label="Active: {{ s.name }}"
+          class="group inline-flex items-center gap-2 rounded-full py-1 pl-1 pr-2 text-small text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-800">
+    <span class="relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors {{ 'bg-teal-700 dark:bg-teal-400' if s.active else 'bg-slate-300 dark:bg-slate-600' }}">
+      <span class="absolute top-0.5 size-4 rounded-full bg-white shadow transition-all {{ 'left-[1.125rem]' if s.active else 'left-0.5' }}"></span>
+    </span>
+    {{ 'Active' if s.active else 'Paused' }}
+  </button>
+</form>
+{%- endmacro %}
+
+{% macro _robots(s) -%}
+{%- if s.robots_allowed is none %}not checked yet{% elif s.robots_allowed %}allowed{% else %}<span class="text-red-700 dark:text-red-300">blocked</span>{% endif -%}
+{%- endmacro %}
+
+{# One source as a table row (wide screens). #}
+{% macro source_row(s, csrf_token) -%}
+<tr id="source-{{ s.key }}" class="align-top transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50{% if not s.active %} text-slate-500 dark:text-slate-400{% endif %}">
+  <td class="py-3 pl-4 pr-2">{{ health_dot(s) }}</td>
+  <td class="px-3 py-3">
+    <p class="font-semibold break-words {{ 'text-slate-900 dark:text-white' if s.active else '' }}">{{ s.name }}</p>
+    <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="mt-0.5 inline-flex max-w-xs items-center gap-1 text-small font-normal text-teal-700 hover:underline lg:max-w-sm dark:text-teal-400">
+      <span class="truncate">{{ s.url }}</span>{{ icon("external-link", "size-3.5") }}<span class="sr-only"> (opens in a new tab)</span>
+    </a>
+    <div class="mt-1.5 flex flex-wrap items-center gap-1.5">{{ type_badge(s.opportunity_type) }}{{ badge(s.location | capitalize, "outline", "location") }}<span class="text-small font-normal">{{ s.key }}</span></div>
+    {%- if s.last_error and s.consecutive_failures %}<p class="mt-2 text-small break-words text-red-800 dark:text-red-300">{{ s.last_error }}</p>{% endif %}
+    {%- if s.note %}<p class="mt-1 text-small font-normal text-slate-600 dark:text-slate-400">{{ s.note }}</p>{% endif %}
+  </td>
+  <td class="px-3 py-3 whitespace-nowrap">{{ rel_time(s.last_fetched_at, "never") }}<div class="text-small font-normal tabular-nums text-slate-600 dark:text-slate-400">HTTP {{ s.last_http_status or '—' }}</div></td>
+  <td class="px-3 py-3 text-right tabular-nums {{ 'font-semibold text-red-700 dark:text-red-300' if s.consecutive_failures else '' }}">{{ s.consecutive_failures }}</td>
+  <td class="px-3 py-3">{{ _robots(s) }}</td>
+  <td class="py-3 pl-3 pr-4 text-right">{{ source_switch(s, csrf_token) }}</td>
+</tr>
+{%- endmacro %}
+
+{# One source as a card (phones). oob=True when it rides along with a switch answer. #}
+{% macro source_card(s, csrf_token, oob=False) -%}
+<li id="source-card-{{ s.key }}"{% if oob %} hx-swap-oob="true"{% endif %} class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900{% if not s.active %} opacity-75{% endif %}">
   <div class="flex items-start justify-between gap-3">
     <div class="min-w-0">
       <p class="font-semibold break-words text-slate-900 dark:text-white">{{ s.name }}</p>
-      <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="mt-0.5 inline-flex max-w-full items-center gap-1 text-small font-normal text-teal-700 hover:underline dark:text-teal-400">
-        <span class="truncate">{{ s.url }}</span>{{ icon("external-link", "size-3.5") }}<span class="sr-only"> (opens in a new tab)</span>
-      </a>
+      <div class="mt-1">{{ health_dot(s, show_text=True) }}</div>
     </div>
-    <form method="post" action="/sources/{{ s.key }}/active"
-          hx-post="/sources/{{ s.key }}/active" hx-target="#source-{{ s.key }}" hx-swap="outerHTML"
-          hx-disabled-elt="find button">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="active" value="{{ '0' if s.active else '1' }}">
-      <button role="switch" aria-checked="{{ 'true' if s.active else 'false' }}" aria-label="Active: {{ s.name }}"
-              class="group inline-flex items-center gap-2 rounded-full py-1 pl-1 pr-2 text-small text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-800">
-        <span class="relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors {{ 'bg-teal-700 dark:bg-teal-400' if s.active else 'bg-slate-300 dark:bg-slate-600' }}">
-          <span class="absolute top-0.5 size-4 rounded-full bg-white shadow transition-all {{ 'left-[1.125rem]' if s.active else 'left-0.5' }}"></span>
-        </span>
-        {{ 'Active' if s.active else 'Paused' }}
-      </button>
-    </form>
+    {{ source_switch(s, csrf_token) }}
   </div>
-  <div class="mt-2 flex flex-wrap gap-1.5">
-    {{ type_badge(s.opportunity_type) }}
-    {{ badge(s.location | capitalize, "outline", "location", "globe") }}
-    <span class="text-small font-normal text-slate-600 dark:text-slate-400 self-center">{{ s.key }}</span>
-  </div>
-  <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-small">
-    <div><dt class="font-normal text-slate-600 dark:text-slate-400">Last fetch</dt><dd class="text-slate-900 dark:text-slate-100">{{ rel_time(s.last_fetched_at, "never") }}</dd></div>
-    <div><dt class="font-normal text-slate-600 dark:text-slate-400">Last HTTP status</dt><dd class="tabular-nums text-slate-900 dark:text-slate-100">{{ s.last_http_status or '-' }}</dd></div>
-    <div><dt class="font-normal text-slate-600 dark:text-slate-400">Failures in a row</dt><dd class="tabular-nums {{ 'text-red-700 dark:text-red-300' if s.consecutive_failures else 'text-slate-900 dark:text-slate-100' }}">{{ s.consecutive_failures }}</dd></div>
-    <div><dt class="font-normal text-slate-600 dark:text-slate-400">robots.txt</dt>
-      <dd>{% if s.robots_allowed is none %}<span class="text-slate-700 dark:text-slate-300">not checked yet</span>{% elif s.robots_allowed %}<span class="text-slate-900 dark:text-slate-100">allowed</span>{% else %}<span class="text-red-700 dark:text-red-300">blocked</span>{% endif %}{% if s.robots_checked_at %} <span class="font-normal text-slate-600 dark:text-slate-400">({{ rel_time(s.robots_checked_at) }})</span>{% endif %}</dd></div>
+  <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="mt-2 flex max-w-full items-center gap-1 text-small font-normal text-teal-700 hover:underline dark:text-teal-400"><span class="truncate">{{ s.url }}</span>{{ icon("external-link", "size-3.5") }}</a>
+  <dl class="mt-3 grid grid-cols-3 gap-2 text-small">
+    <div><dt class="font-normal text-slate-600 dark:text-slate-400">Fetched</dt><dd>{{ rel_time(s.last_fetched_at, "never") }}</dd></div>
+    <div><dt class="font-normal text-slate-600 dark:text-slate-400">Failures</dt><dd class="tabular-nums {{ 'text-red-700 dark:text-red-300' if s.consecutive_failures }}">{{ s.consecutive_failures }}</dd></div>
+    <div><dt class="font-normal text-slate-600 dark:text-slate-400">robots.txt</dt><dd>{{ _robots(s) }}</dd></div>
   </dl>
   {%- if s.last_error and s.consecutive_failures %}<p class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-small break-words text-red-800 dark:bg-red-500/10 dark:text-red-200">{{ s.last_error }}</p>{% endif %}
-  {%- if s.note %}<p class="mt-3 text-small font-normal text-slate-600 dark:text-slate-400">{{ s.note }}</p>{% endif %}
 </li>
 {%- endmacro %}

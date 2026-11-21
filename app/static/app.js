@@ -45,6 +45,50 @@
     try { return localStorage.getItem(VIEW_KEY); } catch (e) { return null; }
   }
 
+  // ---------- Forms with a save bar (Profile): it shows only once something changed ----------
+
+  function formState(form) {
+    return new URLSearchParams(new FormData(form)).toString();
+  }
+
+  function setupDirtyForms() {
+    document.querySelectorAll("form[data-dirty-form]").forEach(function (form) {
+      var bar = form.querySelector("[data-save-bar]");
+      if (!bar) return;
+      var initial = formState(form);
+      var forced = form.getAttribute("data-dirty") === "true"; // came back with errors
+      function update() {
+        var dirty = forced || formState(form) !== initial;
+        bar.classList.toggle("save-bar-hidden", !dirty);
+        if (dirty) { bar.removeAttribute("inert"); } else { bar.setAttribute("inert", ""); }
+        form.setAttribute("data-is-dirty", dirty ? "true" : "false");
+      }
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+      form.addEventListener("reset", function () { forced = false; setTimeout(update, 0); });
+      form.addEventListener("submit", function () { form.setAttribute("data-submitting", "true"); });
+      update();
+    });
+  }
+
+  // Leaving the page with unsaved changes asks first (the browser shows its own message).
+  window.addEventListener("beforeunload", function (event) {
+    if (document.querySelector("form[data-is-dirty=true]:not([data-submitting])")) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+
+  // Live checks (Add source): mark a field invalid when its error line has text.
+  function syncFieldErrors() {
+    document.querySelectorAll("[data-field-error]").forEach(function (line) {
+      var input = document.getElementById("f-" + line.getAttribute("data-field-error"));
+      if (!input) return;
+      if (line.textContent.trim()) { input.setAttribute("aria-invalid", "true"); }
+      else { input.removeAttribute("aria-invalid"); }
+    });
+  }
+
   // ---------- Toasts ----------
 
   var TOAST_MS = 6000;
@@ -136,6 +180,18 @@
       eye.querySelector("[data-eye-closed]").classList.toggle("hidden", !show);
       return;
     }
+    // Expandable rows (Runs): the row or its button opens the details row below it.
+    var toggleRow = target.closest("tr[data-toggle-row]");
+    if (toggleRow && !target.closest("a")) {
+      var details = document.getElementById(toggleRow.getAttribute("data-toggle-row"));
+      var button = toggleRow.querySelector("button[aria-expanded]");
+      if (details) {
+        var open = details.hidden;
+        details.hidden = !open;
+        if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+      }
+      return;
+    }
     // Clickable table rows: the row opens its link (the link inside stays for keyboards).
     var rowLink = target.closest("tr[data-href]");
     if (rowLink && !target.closest("a, button, input, select, textarea, label")) {
@@ -210,6 +266,8 @@
   });
 
   document.addEventListener("htmx:load", function (event) { armToasts(event.target); });
+  document.addEventListener("htmx:afterSettle", syncFieldErrors);
+  document.addEventListener("htmx:oobAfterSwap", syncFieldErrors);
 
   document.addEventListener("htmx:responseError", function (event) {
     var status = event.detail.xhr.status;
@@ -230,6 +288,8 @@
   function start() {
     applyTheme(savedTheme());
     applyView(savedView());
+    setupDirtyForms();
+    syncFieldErrors();
     armToasts(document);
     document.querySelectorAll("dialog[data-open-on-load]").forEach(function (dialog) {
       openDialog(dialog.id);

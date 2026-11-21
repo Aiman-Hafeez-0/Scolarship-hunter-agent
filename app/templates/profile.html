@@ -1,69 +1,77 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon %}
 {% from "components/buttons.html" import btn %}
-{% from "components/cards.html" import card, callout %}
+{% from "components/cards.html" import callout, SURFACE %}
 {% from "components/forms.html" import text_field, checkbox, textarea, form_errors %}
 {% from "components/toast.html" import toast %}
+{% from "components/page_header.html" import page_header %}
 {% set active = "profile" %}
 {% set title = "Profile" %}
 {% set fe = field_errors(errors) %}
+
+{#- One group of settings: title and explanation on the left, the fields on the right. -#}
+{% macro group(id, heading, text, icon_name) -%}
+<section aria-labelledby="{{ id }}-title" class="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-8">
+  <div>
+    <h2 id="{{ id }}-title" class="flex items-center gap-2 text-section">{{ icon(icon_name, "size-5 text-teal-700 dark:text-teal-400") }}{{ heading }}</h2>
+    <p class="mt-1 text-body text-slate-600 dark:text-slate-400">{{ text }}</p>
+  </div>
+  <div class="{{ SURFACE }} grid grid-cols-1 gap-5 p-4 sm:grid-cols-2 sm:p-6 lg:col-span-2">{{ caller() }}</div>
+</section>
+{%- endmacro %}
+
 {% block toasts %}{% if saved %}{{ toast("Saved. New scores appear after the next run.", "success") }}{% endif %}{% endblock %}
 {% block content %}
-<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">
-  Matching uses these facts; they never leave this dashboard and are never sent to an LLM.
-  New scores appear after the next run (or <code class="text-small">uv run python -m pipeline.run match</code>).
-</p>
+{{ page_header("Matching uses these facts. They stay in this dashboard and are never sent to an LLM. New scores appear after the next run.") }}
 
 {%- if is_new %}
-{% call callout("warning", cls="mb-5") %}<p>No profile yet: saving creates it.</p>{% endcall %}
+{% call callout("warning", cls="mb-6") %}<p>No profile yet: saving creates it.</p>{% endcall %}
 {%- endif %}
-{%- if errors %}<div class="mb-5">{{ form_errors(errors) }}</div>{% endif %}
+{%- if errors %}<div class="mb-6">{{ form_errors(errors) }}</div>{% endif %}
 
-<form method="post" action="/profile" class="space-y-6">
+<form method="post" action="/profile" class="space-y-10" data-dirty-form{% if errors %} data-dirty="true"{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-  {% call card("About you") %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {{ text_field("full_name", "Full name", values.get("full_name", ""), error=fe.get("full_name"), autocomplete="name") }}
-      {{ text_field("email", "Email", values.get("email", ""), "email", "Digests and reminders go here.", fe.get("email"), autocomplete="email") }}
-      {{ text_field("nationality", "Nationality", values.get("nationality", ""), help="PK for Pakistan.", error=fe.get("nationality")) }}
-      {{ text_field("date_of_birth", "Date of birth", values.get("date_of_birth", ""), "date", "Used for age limits.", fe.get("date_of_birth")) }}
-    </div>
+  {% call group("academic", "Academic", "The facts the eligibility rules check: your degree, grades, experience, nationality and age.", "graduation-cap") %}
+    {{ text_field("degree", "Degree you have", values.get("degree", ""), help="Your finished (or final-year) degree, e.g. BS Computer Science.", error=fe.get("degree")) }}
+    {{ text_field("nationality", "Nationality", values.get("nationality", ""), help="Two letters: PK for Pakistan. Used for “open to Pakistanis”.", error=fe.get("nationality")) }}
+    {{ text_field("cgpa", "CGPA", values.get("cgpa", ""), "number", "As on your transcript, e.g. 3.4.", fe.get("cgpa"), step="0.01") }}
+    {{ text_field("cgpa_scale", "CGPA scale", values.get("cgpa_scale", ""), "number", "The highest possible CGPA, usually 4.0.", fe.get("cgpa_scale"), step="0.01") }}
+    {{ text_field("work_experience_months", "Work experience (months)", values.get("work_experience_months", ""), "number", "Full-time work after your degree; 0 if none.", fe.get("work_experience_months")) }}
+    {{ text_field("date_of_birth", "Date of birth", values.get("date_of_birth", ""), "date", "Some scholarships have an age limit.", fe.get("date_of_birth")) }}
   {% endcall %}
 
-  {% call card("Studies and English") %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {{ text_field("degree", "Degree you have", values.get("degree", ""), help="e.g. BS Computer Science", error=fe.get("degree")) }}
-      {{ text_field("target_intake", "Target intake", values.get("target_intake", ""), help="e.g. Fall 2027", error=fe.get("target_intake")) }}
-      {{ text_field("cgpa", "CGPA", values.get("cgpa", ""), "number", error=fe.get("cgpa"), step="0.01") }}
-      {{ text_field("cgpa_scale", "CGPA scale", values.get("cgpa_scale", ""), "number", "Usually 4.0.", fe.get("cgpa_scale"), step="0.01") }}
-      {{ text_field("english_test", "English test", values.get("english_test", ""), help="IELTS, TOEFL, PTE or Duolingo; blank if none.", error=fe.get("english_test")) }}
-      {{ text_field("english_score", "English score", values.get("english_score", ""), error=fe.get("english_score")) }}
-      {{ text_field("work_experience_months", "Work experience (months)", values.get("work_experience_months", ""), "number", error=fe.get("work_experience_months")) }}
-      {{ checkbox("moi_letter", "I have a Medium of Instruction (English) letter", values.get("moi_letter"), cls="sm:self-end sm:pb-2") }}
-      {{ textarea("target_fields", "Target fields", values.get("target_fields", ""), 4, "One per line, e.g. Artificial Intelligence.", fe.get("target_fields"), cls="sm:col-span-2") }}
-    </div>
+  {% call group("english", "English", "Most programmes abroad ask for proof of English. Leave the test blank if you have not taken one.", "file-text") %}
+    {{ text_field("english_test", "English test", values.get("english_test", ""), help="IELTS, TOEFL, PTE or Duolingo; blank if none yet.", error=fe.get("english_test")) }}
+    {{ text_field("english_score", "Score", values.get("english_score", ""), help="Your overall score, e.g. 7 for IELTS or 95 for TOEFL.", error=fe.get("english_score")) }}
+    {{ checkbox("moi_letter", "I have a Medium of Instruction (English) letter", values.get("moi_letter"), "Some universities accept it instead of a test.", cls="sm:col-span-2") }}
   {% endcall %}
 
-  {% call card("Money") %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {{ text_field("max_application_fee_eur", "Highest application fee (EUR)", values.get("max_application_fee_eur", ""), "number", "Blank = no limit.", fe.get("max_application_fee_eur"), step="0.01") }}
-      <div class="space-y-3 sm:pt-7">
-        {{ checkbox("prefer_no_fee", "Prefer programmes with no fee", values.get("prefer_no_fee")) }}
-        {{ checkbox("fully_funded_only", "Fully funded only", values.get("fully_funded_only")) }}
+  {% call group("preferences", "Preferences", "What you are looking for. They shape the match score and which items count as a fit.", "sparkles") %}
+    {{ textarea("target_fields", "Target fields", values.get("target_fields", ""), 4, "One per line, e.g. Artificial Intelligence. AI and data science score highest.", fe.get("target_fields"), cls="sm:col-span-2") }}
+    {{ text_field("target_intake", "Target intake", values.get("target_intake", ""), help="The semester you want to start, e.g. Fall 2027.", error=fe.get("target_intake")) }}
+    {{ text_field("max_application_fee_eur", "Highest application fee (EUR)", values.get("max_application_fee_eur", ""), "number", "A higher fee never hides an item: it is shown next to it so you can decide. Blank = no limit.", fe.get("max_application_fee_eur"), step="0.01") }}
+    {{ checkbox("prefer_no_fee", "Prefer programmes with no fee", values.get("prefer_no_fee"), "Saved for later use. Free-to-apply items already get a small score bonus for everyone.") }}
+    {{ checkbox("fully_funded_only", "Fully funded only", values.get("fully_funded_only"), "Partial and tuition-only scholarships then count as “not eligible”.") }}
+  {% endcall %}
+
+  {% call group("notifications", "Notifications", "Where the weekly digest and the deadline reminders go, and when.", "bell") %}
+    {{ text_field("full_name", "Full name", values.get("full_name", ""), help="Used to greet you in the emails.", error=fe.get("full_name"), autocomplete="name") }}
+    {{ text_field("email", "Email", values.get("email", ""), "email", "The digest and reminders are sent here.", fe.get("email"), autocomplete="email") }}
+    {{ text_field("reminder_days", "Reminder days before a deadline", values.get("reminder_days", ""), help="Whole days, separated by commas, e.g. 30, 14, 7, 2.", error=fe.get("reminder_days")) }}
+    {{ checkbox("emails_paused", "Pause all emails", values.get("emails_paused"), "No digest and no reminders until you untick it.", cls="sm:pt-7") }}
+  {% endcall %}
+
+  {#- The save bar: always there without JavaScript; with it, it slides in once you change
+      something (app.js) and stays at the bottom of the screen while you scroll. -#}
+  <div data-save-bar class="sticky bottom-4 z-20 transition-all duration-200">
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:pl-5 dark:border-slate-700 dark:bg-slate-900/95">
+      <p class="flex items-center gap-2 text-body font-semibold text-slate-800 dark:text-slate-100">{{ icon("info", "size-5 text-teal-700 dark:text-teal-400") }}You have unsaved changes.</p>
+      <div class="flex gap-2">
+        <button type="reset" class="{{ btn('ghost', 'md') }} flex-1 sm:flex-none">Discard</button>
+        <button type="submit" class="{{ btn('primary', 'md') }} flex-1 sm:flex-none">{{ icon("check", "size-4") }}Save profile</button>
       </div>
     </div>
-  {% endcall %}
-
-  {% call card("Emails") %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {{ text_field("reminder_days", "Reminder days before a deadline", values.get("reminder_days", ""), help="e.g. 30, 14, 7, 2", error=fe.get("reminder_days")) }}
-      {{ checkbox("emails_paused", "Pause all emails (digest and reminders)", values.get("emails_paused"), cls="sm:pt-7") }}
-    </div>
-  {% endcall %}
-
-  <div class="flex justify-end">
-    <button class="{{ btn('primary', 'md') }} w-full sm:w-auto">{{ icon("check", "size-4") }}Save profile</button>
   </div>
 </form>
 {% endblock %}

@@ -1,16 +1,33 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon %}
-{% from "components/badges.html" import run_badge, badge %}
+{% from "components/badges.html" import run_badge %}
 {% from "components/cards.html" import callout, SURFACE %}
-{% from "components/tables.html" import table, thead, th, TBODY, ROW, TD, MOBILE_LIST, MOBILE_CARD %}
+{% from "components/tables.html" import thead, th %}
 {% from "components/empty.html" import empty_state %}
-{% from "components/time.html" import rel_time %}
+{% from "components/time.html" import rel_time, exact_time %}
 {% from "components/toast.html" import toast %}
+{% from "components/page_header.html" import page_header %}
 {% set active = "runs" %}
 {% set title = "Runs" %}
+
+{#- The numbers of one run, shown when its row is opened (and in the phone card). -#}
+{% macro run_details(r) -%}
+<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-small sm:grid-cols-4">
+  <div><dt class="font-normal text-slate-600 dark:text-slate-400">Started</dt><dd>{{ exact_time(r.started_at) }}</dd></div>
+  <div><dt class="font-normal text-slate-600 dark:text-slate-400">Finished</dt><dd>{{ exact_time(r.finished_at, "not yet") }}</dd></div>
+  <div><dt class="font-normal text-slate-600 dark:text-slate-400">Sources checked / changed / failed</dt><dd class="tabular-nums">{{ r.sources_total }} / {{ r.sources_changed }} / <span class="{{ 'text-red-700 dark:text-red-300' if r.sources_failed }}">{{ r.sources_failed }}</span></dd></div>
+  <div><dt class="font-normal text-slate-600 dark:text-slate-400">Tokens in / out</dt><dd class="tabular-nums">{{ "{:,}".format(r.tokens_in) }} / {{ "{:,}".format(r.tokens_out) }}</dd></div>
+</dl>
+{%- if r.error %}
+<pre class="mt-3 overflow-x-auto rounded-lg bg-red-50 px-3 py-2 text-small whitespace-pre-wrap break-words text-red-900 dark:bg-red-500/10 dark:text-red-100">{{ r.error }}</pre>
+{%- else %}
+<p class="mt-3 text-small font-normal text-slate-600 dark:text-slate-400">No error recorded.{% if r.sources_failed %} Failed sources are listed on the <a href="/sources" class="font-semibold text-teal-700 underline dark:text-teal-400">Sources page</a>.{% endif %}</p>
+{%- endif %}
+{%- endmacro %}
+
 {% block toasts %}{% if dispatch %}{{ toast(dispatch.message, "success" if dispatch.ok else "error", "Open the Actions page", dispatch.actions_url) }}{% endif %}{% endblock %}
 {% block content %}
-<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">Every time the agent ran: what it checked, what changed, and how many LLM tokens it used.</p>
+{{ page_header("Every time the agent ran: what it checked, what it saved and how many LLM tokens it used. Click a run to see its details and errors.") }}
 
 {%- if github_problem %}
 {% call callout("info", cls="mb-5") %}
@@ -23,40 +40,52 @@
   {{ empty_state("activity", "No runs recorded yet.", "The weekly workflow runs every morning at 08:17 PKT. You can also start one with Run now.") }}
 </div>
 {%- else %}
-{% call table("Run history") %}
-  {% call thead() %}{{ th("Started") }}{{ th("Kind") }}{{ th("Status") }}{{ th("Checked", "right") }}{{ th("Changed", "right") }}{{ th("Failed", "right") }}{{ th("Saved", "right") }}{{ th("Tokens", "right") }}{{ th("Error") }}{% endcall %}
-  <tbody class="{{ TBODY }}">
-    {%- for r in runs %}
-    <tr class="{{ ROW }}">
-      <td class="{{ TD }} whitespace-nowrap">{{ rel_time(r.started_at) }}</td>
-      <td class="{{ TD }}">{{ r.kind | capitalize }}</td>
-      <td class="{{ TD }}">{{ run_badge(r.status) }}</td>
-      <td class="{{ TD }} text-right tabular-nums">{{ r.sources_total }}</td>
-      <td class="{{ TD }} text-right tabular-nums">{{ r.sources_changed }}</td>
-      <td class="{{ TD }} text-right tabular-nums{% if r.sources_failed %} font-semibold text-red-700 dark:text-red-300{% endif %}">{{ r.sources_failed }}</td>
-      <td class="{{ TD }} text-right tabular-nums whitespace-nowrap">{{ r.items_saved }}{% if r.items_needing_review %} <span class="text-small text-amber-800 dark:text-amber-300">({{ r.items_needing_review }} review)</span>{% endif %}</td>
-      <td class="{{ TD }} text-right tabular-nums">{{ "{:,}".format(r.tokens_in + r.tokens_out) }}</td>
-      <td class="{{ TD }} max-w-xs text-small break-words text-red-800 dark:text-red-300">{{ r.error or '' }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody>
-{% endcall %}
+<noscript><style>tr[data-run-details] { display: table-row !important; }</style></noscript>
+<div class="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs sm:block dark:border-slate-800 dark:bg-slate-900">
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-body">
+      <caption class="sr-only">Run history</caption>
+      {% call thead() %}{{ th("Status") }}{{ th("Run") }}{{ th("Started") }}{{ th("Duration") }}{{ th("Items saved", "right") }}{{ th("Tokens", "right") }}<th scope="col" class="w-12 px-4"><span class="sr-only">Details</span></th>{% endcall %}
+      {%- for r in runs %}
+      <tbody class="border-b border-slate-100 last:border-0 dark:border-slate-800">
+        <tr class="cursor-pointer align-middle transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50" data-toggle-row="run-{{ r.id }}">
+          <td class="px-4 py-3">{{ run_badge(r.status) }}</td>
+          <td class="px-4 py-3 font-semibold text-slate-900 dark:text-white">{{ r.kind | capitalize }}
+            {%- if r.error %} <span class="ml-1 inline-flex items-center gap-1 text-small font-normal text-red-700 dark:text-red-300">{{ icon("triangle-alert", "size-3.5") }}error</span>{% endif %}</td>
+          <td class="px-4 py-3 whitespace-nowrap">{{ rel_time(r.started_at) }}</td>
+          <td class="px-4 py-3 whitespace-nowrap tabular-nums">{{ duration(r.started_at, r.finished_at) }}</td>
+          <td class="px-4 py-3 text-right tabular-nums">{{ r.items_saved }}{% if r.items_needing_review %} <span class="text-small text-amber-800 dark:text-amber-300">({{ r.items_needing_review }} review)</span>{% endif %}</td>
+          <td class="px-4 py-3 text-right tabular-nums">{{ "{:,}".format(r.tokens_in + r.tokens_out) }}</td>
+          <td class="px-4 py-3 text-right">
+            <button type="button" aria-expanded="false" aria-controls="run-{{ r.id }}" aria-label="Details of the {{ r.kind }} run {{ r.started_at | pkt }}"
+                    class="group grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+              {{ icon("chevron-down", "size-4 transition-transform group-aria-expanded:rotate-180") }}
+            </button>
+          </td>
+        </tr>
+        <tr id="run-{{ r.id }}" data-run-details hidden class="bg-slate-50/70 dark:bg-slate-950/40">
+          <td colspan="7" class="px-4 py-4">{{ run_details(r) }}</td>
+        </tr>
+      </tbody>
+      {%- endfor %}
+    </table>
+  </div>
+</div>
 
-<ul class="{{ MOBILE_LIST }}">
+<ul class="space-y-3 sm:hidden">
   {%- for r in runs %}
-  <li class="{{ MOBILE_CARD }}">
-    <div class="flex items-center justify-between gap-2">
-      <span class="font-semibold">{{ r.kind | capitalize }} run</span>{{ run_badge(r.status) }}
-    </div>
-    <p class="text-small font-normal text-slate-600 dark:text-slate-400">{{ rel_time(r.started_at) }}</p>
-    <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-small tabular-nums">
-      <div class="flex justify-between gap-2"><dt class="font-normal text-slate-600 dark:text-slate-400">Checked</dt><dd>{{ r.sources_total }}</dd></div>
-      <div class="flex justify-between gap-2"><dt class="font-normal text-slate-600 dark:text-slate-400">Changed</dt><dd>{{ r.sources_changed }}</dd></div>
-      <div class="flex justify-between gap-2"><dt class="font-normal text-slate-600 dark:text-slate-400">Failed</dt><dd{% if r.sources_failed %} class="text-red-700 dark:text-red-300"{% endif %}>{{ r.sources_failed }}</dd></div>
-      <div class="flex justify-between gap-2"><dt class="font-normal text-slate-600 dark:text-slate-400">Saved</dt><dd>{{ r.items_saved }}</dd></div>
-      <div class="col-span-2 flex justify-between gap-2"><dt class="font-normal text-slate-600 dark:text-slate-400">Tokens</dt><dd>{{ "{:,}".format(r.tokens_in + r.tokens_out) }}</dd></div>
-    </dl>
-    {%- if r.error %}<p class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-small break-words text-red-800 dark:bg-red-500/10 dark:text-red-200">{{ r.error }}</p>{% endif %}
+  <li class="rounded-xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
+    <details class="group">
+      <summary class="flex cursor-pointer list-none items-start justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <span class="min-w-0">
+          <span class="flex items-center gap-2">{{ run_badge(r.status) }}<span class="font-semibold">{{ r.kind | capitalize }}</span></span>
+          <span class="mt-1 block text-small font-normal text-slate-600 dark:text-slate-400">{{ rel_time(r.started_at) }} · {{ duration(r.started_at, r.finished_at) }}</span>
+          <span class="mt-1 block text-small tabular-nums">{{ r.items_saved }} saved · {{ "{:,}".format(r.tokens_in + r.tokens_out) }} tokens{% if r.error %} · <span class="text-red-700 dark:text-red-300">error</span>{% endif %}</span>
+        </span>
+        {{ icon("chevron-down", "mt-1 size-4 transition-transform group-open:rotate-180") }}
+      </summary>
+      <div class="border-t border-slate-100 p-4 dark:border-slate-800">{{ run_details(r) }}</div>
+    </details>
   </li>
   {%- endfor %}
 </ul>

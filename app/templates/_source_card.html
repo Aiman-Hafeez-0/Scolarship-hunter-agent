@@ -1,1 +1,3 @@
-{% from "_parts.html" import source_card %}{{ source_card(s, csrf_token) }}
+{#- The answer to the on/off switch: the table row, and the phone card out of band. -#}
+{% from "_parts.html" import source_row, source_card %}{{ source_row(s, csrf_token) }}
+{{ source_card(s, csrf_token, oob=True) }}

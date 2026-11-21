@@ -3,6 +3,7 @@
 import yaml
 
 from app.forms import (
+    live_source_errors,
     parse_profile_form,
     parse_reminder_days,
     parse_source_form,
@@ -75,3 +76,27 @@ def test_source_yaml_pastes_back_into_sources_yaml() -> None:
     assert "active" not in text and "render_js" not in text  # defaults are left out
     [loaded] = yaml.safe_load("sources:\n" + text)["sources"]
     assert Source.model_validate(loaded) == source
+
+
+EXISTING = [("nust-pg", "https://nust.edu.pk/pg")]
+
+
+def test_live_source_errors_check_only_filled_fields() -> None:
+    errors = live_source_errors({"url": "http://x.org", "key": "Bad Key", "name": ""}, EXISTING)
+    assert errors["url"] == "url must start with https://"
+    assert errors["key"] == "use lowercase letters, digits and dashes, e.g. example-uni-ms"
+    assert errors["name"] == ""  # empty: not an error until you save
+    assert set(errors) == {"url", "name", "key", "program_key", "country", "note"}
+
+
+def test_live_source_errors_catch_duplicates() -> None:
+    errors = live_source_errors({"url": "https://nust.edu.pk/pg", "key": "nust-pg"}, EXISTING)
+    assert errors["url"] == "this page is already a source"
+    assert errors["key"] == "a source with this key already exists"
+
+
+def test_live_source_errors_are_empty_for_a_good_form() -> None:
+    form = {"url": "https://www.example.edu/ms", "name": "Example MS", "key": "example-ms",
+            "country": "DE", "opportunity_type": "admission", "location": "abroad",
+            "type": "official"}  # fmt: skip
+    assert not any(live_source_errors(form, EXISTING).values())

@@ -6,9 +6,11 @@
 {% from "components/empty.html" import empty_state %}
 {% from "components/time.html" import rel_time %}
 {% from "_parts.html" import deadline_row %}
+{% from "components/page_header.html" import page_header %}
 {% set active = "overview" %}
 {% set title = "Overview" %}
 {% block content %}
+{{ page_header("Your matches, the next deadlines and what changed since the last run, at a glance.") }}
 {%- if s.run_overdue %}
 {% call callout("danger", role="alert", cls="mb-6") %}
   <p><strong class="font-semibold">No successful weekly run in the last 8 days.</strong>

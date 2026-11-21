@@ -5,14 +5,17 @@
 {% from "components/forms.html" import text_field, select_field, checkbox, form_errors %}
 {% from "components/slide_over.html" import slide_over %}
 {% from "components/empty.html" import empty_state %}
-{% from "_parts.html" import source_card %}
+{% from "components/tables.html" import thead, th %}
+{% from "components/page_header.html" import page_header %}
+{% from "_parts.html" import source_row, source_card %}
 {% set active = "sources" %}
 {% set title = "Sources" %}
+{% set fe = field_errors(errors) %}
+{% set failing = sources | selectattr("active") | selectattr("consecutive_failures") | list | length %}
 {% block content %}
-<div class="-mt-2 mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-  <p class="max-w-2xl text-body text-slate-600 dark:text-slate-400">The official pages the agent checks. <span class="tabular-nums">{{ sources | length }}</span> source{{ '' if sources | length == 1 else 's' }}; pause one to skip it in the next runs.</p>
+{% call page_header("The official pages the agent checks every run. Pause one to skip it; a red dot means it failed last time.") %}
   {{ link_button("Add source", "/sources?add=1", "primary", "md", "plus", attrs={"data-open-dialog": "add-source"}) }}
-</div>
+{% endcall %}
 
 {%- if added %}
 {% call callout("success", role="status", cls="mb-6") %}
@@ -25,7 +28,24 @@
 {%- endif %}
 
 {%- if sources %}
-<ul class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+<p class="mb-3 text-small text-slate-600 tabular-nums dark:text-slate-400">
+  {{ sources | length }} source{{ '' if sources | length == 1 else 's' }} · {{ sources | selectattr("active") | list | length }} active
+  {%- if failing %} · <span class="text-red-700 dark:text-red-300">{{ failing }} failing</span>{% endif %}
+</p>
+
+<div class="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs sm:block dark:border-slate-800 dark:bg-slate-900">
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-body">
+      <caption class="sr-only">Sources</caption>
+      {% call thead() %}<th scope="col" class="w-10 py-2.5 pl-4 pr-2"><span class="sr-only">Health</span></th>{{ th("Source") }}{{ th("Last fetched") }}{{ th("Failures", "right") }}{{ th("robots.txt") }}<th scope="col" class="py-2.5 pl-3 pr-4 text-right text-small uppercase tracking-wide text-slate-600 dark:text-slate-400">On / off</th>{% endcall %}
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {%- for s in sources %}{{ source_row(s, csrf_token) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<ul class="space-y-3 sm:hidden">
   {%- for s in sources %}{{ source_card(s, csrf_token) }}{% endfor %}
 </ul>
 {%- else %}
@@ -34,21 +54,24 @@
 </div>
 {%- endif %}
 
-{% call slide_over("add-source", "Add a source", "An official, public page. We check robots.txt before saving it.", open=open_add) %}
+{% call slide_over("add-source", "Add a source", "An official, public page. We check each field as you type, and robots.txt when you save.", open=open_add) %}
   {{ form_errors(errors) }}
-  <form method="post" action="/sources" class="{{ 'mt-5 ' if errors }}space-y-4" data-loading-form>
+  {#- Live checks: every change asks /sources/validate, which fills in the error lines
+      (out of band). The real save is a normal POST. -#}
+  <form method="post" action="/sources" class="{{ 'mt-5 ' if errors }}space-y-4" data-loading-form novalidate
+        hx-post="/sources/validate" hx-trigger="input delay:400ms, change" hx-swap="none" hx-sync="this:replace">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    {{ text_field("url", "Page URL", values.get("url", ""), "url", "Must start with https:// and be public (no login).", required=True, placeholder="https://...") }}
-    {{ text_field("name", "Name", values.get("name", ""), required=True, placeholder="Example University MS admissions") }}
+    {{ text_field("url", "Page URL", values.get("url", ""), "url", "Must start with https:// and be public (no login).", required=True, placeholder="https://...", live=True, error=fe.get("url", "")) }}
+    {{ text_field("name", "Name", values.get("name", ""), help="How it shows in the dashboard.", required=True, placeholder="Example University MS admissions", live=True, error=fe.get("name", "")) }}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {{ text_field("key", "Key", values.get("key", ""), help="Lowercase letters, digits and dashes.", required=True, placeholder="example-uni-ms") }}
-      {{ text_field("program_key", "Program key", values.get("program_key", ""), help="Blank = same as the key.") }}
-      {{ text_field("country", "Country", values.get("country", ""), help="Two letters, e.g. PK or DE.", required=True, placeholder="PK") }}
+      {{ text_field("key", "Key", values.get("key", ""), help="Lowercase letters, digits and dashes.", required=True, placeholder="example-uni-ms", live=True, error=fe.get("key", "")) }}
+      {{ text_field("program_key", "Program key", values.get("program_key", ""), help="Blank = same as the key.", live=True, error=fe.get("program_key", "")) }}
+      {{ text_field("country", "Country", values.get("country", ""), help="Two letters, e.g. PK or DE.", required=True, placeholder="PK", live=True, error=fe.get("country", "")) }}
       {{ select_field("opportunity_type", "Type", ["scholarship", "admission", "entry_test"], values.get("opportunity_type", "scholarship"), blank=None, required=True) }}
       {{ select_field("location", "Location", ["abroad", "pakistan"], values.get("location", "abroad"), blank=None, required=True) }}
       {{ select_field("type", "Trust", ["official", "lead"], values.get("type", "official"), blank=None, required=True, help="Lead = a news or blog page that points to the official one.") }}
     </div>
-    {{ text_field("note", "Note", values.get("note", "")) }}
+    {{ text_field("note", "Note", values.get("note", ""), help="Optional, only for you.", live=True, error=fe.get("note", "")) }}
     {{ checkbox("is_pdf", "The URL is a PDF file", values.get("is_pdf")) }}
     <div class="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end dark:border-slate-800">
       <button type="button" class="{{ btn('secondary', 'md') }}" data-close-dialog>Cancel</button>

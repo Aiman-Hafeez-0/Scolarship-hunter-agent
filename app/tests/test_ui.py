@@ -97,3 +97,20 @@ def test_built_css_is_committed_and_has_the_design_tokens() -> None:
     assert "Manrope" in css  # the font
     assert ".text-title" in css and ".tabular-nums" in css  # type scale, aligned numbers
     assert ".dark" in css  # the dark mode toggle
+
+
+def test_source_health() -> None:
+    assert ui.source_health(False, 3, True, True) == "paused"  # paused wins
+    assert ui.source_health(True, 2, True, True) == "failing"
+    assert ui.source_health(True, 0, False, True) == "failing"  # blocked by robots.txt
+    assert ui.source_health(True, 0, None, False) == "new"
+    assert ui.source_health(True, 0, True, True) == "ok"
+
+
+def test_duration() -> None:
+    start = NOW
+    assert ui.duration(start, start + timedelta(seconds=45)) == "45 s"
+    assert ui.duration(start, start + timedelta(minutes=3, seconds=5)) == "3 min 05 s"
+    assert ui.duration(start, start + timedelta(hours=1, minutes=2)) == "1 h 02 min"
+    assert ui.duration(start, None) == "running"
+    assert ui.duration(start, start - timedelta(seconds=5)) == "0 s"  # clock skew

@@ -106,6 +106,36 @@ def quote_link(url: str, text: str) -> str:
     return f"{base}#:~:text={target}"
 
 
+Health = Literal["ok", "failing", "paused", "new"]
+HEALTH_TEXT: dict[str, str] = {
+    "ok": "Working", "failing": "Failing", "paused": "Paused", "new": "Not fetched yet",
+}  # fmt: skip
+
+
+def source_health(
+    active: bool, consecutive_failures: int, robots_allowed: bool | None, fetched: bool
+) -> Health:
+    """The dot next to a source: paused (gray), failing (red: errors in a row or blocked by
+    robots.txt), new (gray: never fetched yet) or ok (green)."""
+    if not active:
+        return "paused"
+    if consecutive_failures > 0 or robots_allowed is False:
+        return "failing"
+    return "ok" if fetched else "new"
+
+
+def duration(started: datetime, finished: datetime | None) -> str:
+    """How long a run took: '45 s', '3 min 05 s', '1 h 02 min'; 'running' if not finished."""
+    if finished is None:
+        return "running"
+    seconds = max(0, int((finished - started).total_seconds()))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60:02} s"
+    return f"{seconds // 3600} h {seconds % 3600 // 60:02} min"
+
+
 def days_left(deadline: date, today: date) -> int:
     return (deadline - today).days
 

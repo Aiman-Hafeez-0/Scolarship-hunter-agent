@@ -32,7 +32,7 @@
 {%- if disabled -%}
 <span class="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-lg px-3 text-small text-slate-400 dark:text-slate-600" aria-disabled="true">{{ text }}</span>
 {%- else -%}
-<a href="{{ href }}" hx-get="{{ href | replace('/scholarships', '/scholarships/table', 1) }}" hx-target="#results" hx-swap="innerHTML show:#opps:top"
+<a href="{{ href }}" hx-get="{{ href | replace('/scholarships', '/scholarships/table', 1) }}" hx-target="#results" hx-swap="innerHTML show:#opps:top" hx-indicator="#opps"
    {%- if current %} aria-current="page"{% endif %}{% if aria %} aria-label="{{ aria }}"{% endif %}
    class="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-lg px-3 text-small tabular-nums transition-colors {{ 'bg-teal-700 text-white dark:bg-teal-400 dark:text-slate-950' if current else 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800' }}">{{ text }}</a>
 {%- endif -%}

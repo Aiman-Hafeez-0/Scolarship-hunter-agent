@@ -1,0 +1,5 @@
+{#- The answer to the live check of "Add source": the error line of every checked field,
+    swapped in place by id (out of band). An empty line hides itself (empty:hidden). -#}
+{%- for name, message in errors.items() %}
+<p id="f-{{ name }}-error" hx-swap-oob="true" data-field-error="{{ name }}" class="mt-1.5 text-small text-red-700 empty:hidden dark:text-red-300">{{ message }}</p>
+{%- endfor %}

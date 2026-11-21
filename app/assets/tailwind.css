@@ -65,9 +65,23 @@
   .htmx-request.htmx-hide-on-request {
     display: none;
   }
-  #results.htmx-request {
-    opacity: 0.55;
-    transition: opacity 150ms;
+  /* Loading skeletons (components/skeleton.html): shown instead of the results while the
+     element named by hx-indicator (here #opps) has the htmx-request class. */
+  .skeleton-indicator {
+    display: none;
+  }
+  .htmx-request > .skeleton-indicator {
+    display: block;
+  }
+  .htmx-request > .skeleton-indicator + #results {
+    display: none;
+  }
+
+  /* The Profile save bar while nothing has changed (app.js adds and removes it). */
+  .save-bar-hidden {
+    transform: translateY(150%);
+    opacity: 0;
+    pointer-events: none;
   }
 
   /* The slide-over panel and the mobile drawer slide in from the sides. */

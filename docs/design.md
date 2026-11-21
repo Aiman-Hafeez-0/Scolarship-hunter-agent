@@ -99,6 +99,8 @@ All live in `app/templates/components/`. Import what a page needs, for example
 | `slide_over.html` | `slide_over` (with `caller`) | A `<dialog>` that slides in from the right, for side forms like "Add source". |
 | `dialog.html` | `confirm_dialog` | A `<dialog>` that asks "Are you sure?" before an action (used by Run now). |
 | `time.html` | `rel_time`, `exact_time` | "2 hours ago" with the exact PKT time on hover (`<time title=...>`). |
+| `page_header.html` | `page_header` | The one sentence under the title that says what the page is for, with the page's buttons on the right. Every page starts with it. |
+| `skeleton.html` | `skeleton_rows` | Gray placeholder rows shown while an HTMX request runs (never a bare "Loading…"). |
 
 ## Page patterns
 
@@ -124,6 +126,20 @@ All live in `app/templates/components/`. Import what a page needs, for example
 - **Calendar**: a Monday-first month grid on wide screens; phones get the list of busy days.
   Entries are chips colored by the deadline rule.
 
+- **Health dot** (Sources): green working, red failing (errors in a row or blocked by
+  robots.txt), gray paused or not fetched yet. Always with words next to it or for screen
+  readers.
+- **Expandable rows** (Runs): click the row or its chevron button (`aria-expanded`) to show
+  details and errors underneath. Phones use `<details>`.
+- **Live validation** (Add source): fields with `live=True` keep an empty error line; as you
+  type, the server fills it in (out-of-band swap) and `app.js` sets `aria-invalid`, which
+  turns the ring red. Required-but-empty is only an error on save.
+- **Save bar** (Profile): a sticky bar at the bottom with Discard and Save, shown only once
+  something changed (`data-dirty-form`). Leaving with unsaved changes asks first.
+- **Error pages** (`error.html`): one calm card for 403, 404, 500 and 503 with the code, a
+  plain sentence and a way back; inside the app frame when logged in, on a plain page
+  otherwise. A bug never shows its details.
+
 ## Rules for every page
 
 - **Time:** every date and time is shown in Pakistan time (PKT). Times in the past are shown
@@ -134,7 +150,10 @@ All live in `app/templates/components/`. Import what a page needs, for example
   A "Skip to content" link is the first thing on the page.
 - **Empty states:** every list has a friendly empty state that says what will appear and, when
   possible, what to do.
-- **Loading:** buttons that start slow work show a spinner and are disabled until done.
+- **Loading:** buttons that start slow work show a spinner and are disabled until done;
+  regions that HTMX replaces show a skeleton meanwhile.
+- **Titles:** every page's `<title>` is "Page · Scholarship Hunter" (the detail page uses the
+  item's name). The favicon is `app/static/favicon.svg`.
 - **Errors:** say what happened and what to do, in plain words ("Wrong email or password").
 - **No JavaScript framework.** Pages are server-rendered with Jinja2; HTMX swaps parts of a
   page; `app/static/app.js` is a small file of plain JavaScript (theme, drawer, dialogs,

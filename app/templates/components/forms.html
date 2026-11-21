@@ -1,36 +1,38 @@
 {# Form fields: label above, helper text below, error text (red) below that.
-   Every field gets id "f-<name>"; helper and error are linked with aria-describedby. #}
+   Every field gets id "f-<name>"; helper and error are linked with aria-describedby.
+   live=True keeps an (empty) error line ready, for checks while you type: the server
+   fills it in (see _source_errors.html) and app.js sets aria-invalid to match. #}
 
-{% set INPUT = "block w-full rounded-lg border-0 bg-white px-3 py-2 text-body text-slate-900 shadow-xs ring-1 ring-inset ring-slate-300 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-700 disabled:opacity-60 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-700 dark:placeholder:text-slate-500 dark:focus:ring-teal-400" %}
+{% set INPUT = "block w-full rounded-lg border-0 bg-white px-3 py-2 text-body text-slate-900 shadow-xs ring-1 ring-inset ring-slate-300 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-700 disabled:opacity-60 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-700 dark:placeholder:text-slate-500 dark:focus:ring-teal-400 aria-invalid:ring-red-600 dark:aria-invalid:ring-red-400" %}
 {% set INPUT_ERROR = "ring-red-600 dark:ring-red-400" %}
 {% set LABEL = "block text-small text-slate-800 dark:text-slate-200" %}
 
-{% macro _described(name, help, error) -%}
+{% macro _described(name, help, error, live=False) -%}
 {%- set ids = [] -%}
 {%- if help %}{% set _ = ids.append("f-" ~ name ~ "-help") %}{% endif -%}
-{%- if error %}{% set _ = ids.append("f-" ~ name ~ "-error") %}{% endif -%}
+{%- if error or live %}{% set _ = ids.append("f-" ~ name ~ "-error") %}{% endif -%}
 {%- if ids %} aria-describedby="{{ ids | join(' ') }}"{% endif %}{% if error %} aria-invalid="true"{% endif -%}
 {%- endmacro %}
 
-{% macro _notes(name, help, error) -%}
+{% macro _notes(name, help, error, live=False) -%}
 {%- if help %}<p id="f-{{ name }}-help" class="mt-1.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ help }}</p>{% endif -%}
-{%- if error %}<p id="f-{{ name }}-error" class="mt-1.5 text-small text-red-700 dark:text-red-300">{{ error }}</p>{% endif -%}
+{%- if error or live %}<p id="f-{{ name }}-error" data-field-error="{{ name }}" class="mt-1.5 text-small text-red-700 empty:hidden dark:text-red-300">{{ error or '' }}</p>{% endif -%}
 {%- endmacro %}
 
 {% macro _label(name, label, required) -%}
 <label for="f-{{ name }}" class="{{ LABEL }}">{{ label }}{% if required %} <span class="text-red-700 dark:text-red-300" aria-hidden="true">*</span>{% endif %}</label>
 {%- endmacro %}
 
-{% macro text_field(name, label, value="", type="text", help="", error="", required=False, placeholder="", step="", autocomplete="", cls="") -%}
+{% macro text_field(name, label, value="", type="text", help="", error="", required=False, placeholder="", step="", autocomplete="", cls="", live=False) -%}
 <div class="{{ cls }}">
   {{ _label(name, label, required) }}
   <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value if value is not none else '' }}"
          {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
          {%- if step %} step="{{ step }}"{% endif %}
          {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
-         {%- if required %} required{% endif %}{{ _described(name, help, error) }}
+         {%- if required %} required{% endif %}{{ _described(name, help, error, live) }}
          class="mt-1.5 {{ INPUT }}{% if error %} {{ INPUT_ERROR }}{% endif %}">
-  {{ _notes(name, help, error) }}
+  {{ _notes(name, help, error, live) }}
 </div>
 {%- endmacro %}
 
