@@ -1,59 +1,79 @@
-{% from "components/badges.html" import countdown, match_badge, review_badge, unchecked_badge, type_badge, closed_badge %}
-{% from "components/tables.html" import table, thead, th, TBODY, ROW, CLICKABLE, TD, MOBILE_LIST, MOBILE_CARD %}
+{#- The results of the Opportunities page: the count, one page (25) as a table or as cards,
+    page links, and the items with no future deadline in a folded group on the last page.
+    HTMX swaps this whole block; with `oob` it also sends fresh filter chips. -#}
+{% from "components/icons.html" import icon %}
+{% from "components/tables.html" import thead, th %}
 {% from "components/cards.html" import SURFACE %}
 {% from "components/empty.html" import empty_state %}
-<p class="mb-3 text-small text-slate-600 tabular-nums dark:text-slate-400" aria-live="polite">{{ rows | length }} result{{ '' if rows | length == 1 else 's' }}</p>
+{% from "components/buttons.html" import link_button %}
+{% from "_parts.html" import opp_row, opp_card %}
 
-{%- if not rows %}
+{% macro results(rows, label) -%}
+{#- Table view (wide screens, unless cards are chosen). -#}
+<div class="opp-table hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs sm:block dark:border-slate-800 dark:bg-slate-900">
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-body">
+      <caption class="sr-only">{{ label }}</caption>
+      {% call thead() %}{{ th("Name") }}{{ th("Type") }}{{ th("Funding") }}{{ th("Next deadline") }}{{ th("Match") }}{{ th("Score", "right") }}{% endcall %}
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {%- for r in rows %}{{ opp_row(r, today) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{#- Card view (always on phones). -#}
+<ul class="opp-cards grid grid-cols-1 gap-3 sm:hidden">
+  {%- for r in rows %}{{ opp_card(r, today) }}{% endfor %}
+</ul>
+{%- endmacro %}
+
+{% macro page_link(number, text, current=False, disabled=False, aria=None) -%}
+{%- set href = f.link(page=number) -%}
+{%- if disabled -%}
+<span class="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-lg px-3 text-small text-slate-400 dark:text-slate-600" aria-disabled="true">{{ text }}</span>
+{%- else -%}
+<a href="{{ href }}" hx-get="{{ href | replace('/scholarships', '/scholarships/table', 1) }}" hx-target="#results" hx-swap="innerHTML show:#opps:top"
+   {%- if current %} aria-current="page"{% endif %}{% if aria %} aria-label="{{ aria }}"{% endif %}
+   class="inline-flex h-9 min-w-9 items-center justify-center gap-1 rounded-lg px-3 text-small tabular-nums transition-colors {{ 'bg-teal-700 text-white dark:bg-teal-400 dark:text-slate-950' if current else 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800' }}">{{ text }}</a>
+{%- endif -%}
+{%- endmacro %}
+
+<p class="mb-3 text-small text-slate-600 tabular-nums dark:text-slate-400" aria-live="polite">
+  {{ total }} result{{ '' if total == 1 else 's' }}
+  {%- if page.pages > 1 %} · showing {{ page.first }}–{{ page.last }} of {{ page.total }} with a date{% endif %}
+</p>
+
+{%- if not total %}
 <div class="{{ SURFACE }}">
-  {{ empty_state("search", "Nothing matches these filters.", "Try a shorter search, or clear the filters to see everything.", "Clear filters", "/scholarships") }}
+  {%- if f.q %}
+  {{ empty_state("search", "Nothing matches these filters.", "No opportunity has “" ~ f.q ~ "” in its name, provider or country with these filters. Check the spelling, try a shorter word, or clear the filters.", "Clear filters", "/scholarships") }}
+  {%- else %}
+  {{ empty_state("search", "Nothing matches these filters.", "Try removing a filter chip, or tick “Show closed ones too”. Clearing the filters shows everything.", "Clear filters", "/scholarships") }}
+  {%- endif %}
 </div>
 {%- else %}
-{#- Wide screens: a table. Each row opens its detail page. -#}
-{% call table("Opportunities") %}
-  {% call thead() %}{{ th("Name") }}{{ th("Type") }}{{ th("Funding") }}{{ th("Next deadline") }}{{ th("Match") }}{{ th("Score", "right") }}{% endcall %}
-  <tbody class="{{ TBODY }}">
-    {%- for r in rows %}
-    <tr class="{{ ROW }} {{ CLICKABLE }}" data-href="/scholarships/{{ r.id }}">
-      <td class="{{ TD }}">
-        <a href="/scholarships/{{ r.id }}" class="rounded font-semibold text-slate-900 hover:text-teal-700 hover:underline dark:text-white dark:hover:text-teal-400">{{ r.name }}</a>
-        <div class="mt-0.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ r.provider or '' }}{% if r.country %}{% if r.provider %} · {% endif %}{{ r.country }}{% endif %} · {{ r.location | capitalize }}</div>
-        {%- if r.needs_review or not r.verified or r.status == 'closed' %}
-        <div class="mt-1.5 flex flex-wrap gap-1">{% if r.status == 'closed' %}{{ closed_badge() }}{% endif %}{% if r.needs_review %}{{ review_badge() }}{% endif %}{% if not r.verified %}{{ unchecked_badge() }}{% endif %}</div>
-        {%- endif %}
-      </td>
-      <td class="{{ TD }}">{{ type_badge(r.opportunity_type) }}</td>
-      <td class="{{ TD }} text-slate-700 dark:text-slate-300">{{ r.funding | label | capitalize }}</td>
-      <td class="{{ TD }} whitespace-nowrap">
-        {%- if r.next_deadline %}<span class="tabular-nums">{{ r.next_deadline | day }}</span><div class="mt-1">{{ countdown(r.next_deadline, today) }}</div>
-        {%- else %}<span class="text-slate-600 dark:text-slate-400">none ahead</span>{% endif %}
-      </td>
-      <td class="{{ TD }}">{{ match_badge(r.match_status) }}</td>
-      <td class="{{ TD }} text-right font-semibold tabular-nums">{{ r.score if r.score is not none else '-' }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody>
-{% endcall %}
+{%- if page.items %}{{ results(page.items, "Opportunities with a deadline") }}{% endif %}
 
-{#- Phones (under 640 px): one card per item. -#}
-<ul class="{{ MOBILE_LIST }}">
-  {%- for r in rows %}
-  <li>
-    <a href="/scholarships/{{ r.id }}" class="{{ MOBILE_CARD }} transition-colors hover:border-teal-300 dark:hover:border-teal-700">
-      <span class="flex items-start justify-between gap-3">
-        <span class="min-w-0 font-semibold text-slate-900 dark:text-white">{{ r.name }}</span>
-        {%- if r.score is not none %}<span class="shrink-0 text-small tabular-nums text-slate-600 dark:text-slate-400">score <span class="font-bold text-slate-900 dark:text-white">{{ r.score }}</span></span>{% endif %}
-      </span>
-      <span class="mt-0.5 block text-small font-normal text-slate-600 dark:text-slate-400">{{ r.funding | label | capitalize }} funding · {{ r.location | capitalize }}</span>
-      <span class="mt-3 flex flex-wrap items-center gap-1.5">
-        {{ match_badge(r.match_status) }}{{ type_badge(r.opportunity_type) }}
-        {%- if r.next_deadline %}{{ countdown(r.next_deadline, today) }}{% endif %}
-        {%- if r.status == 'closed' %}{{ closed_badge() }}{% endif %}
-        {%- if r.needs_review %}{{ review_badge() }}{% endif %}
-        {%- if not r.verified %}{{ unchecked_badge() }}{% endif %}
-      </span>
-    </a>
-  </li>
-  {%- endfor %}
-</ul>
+{%- if page.pages > 1 %}
+<nav aria-label="Pages" class="mt-4 flex flex-wrap items-center justify-center gap-1">
+  {{ page_link(page.number - 1, icon("chevron-right", "size-4 rotate-180") ~ "Previous", disabled=page.number == 1, aria="Previous page") }}
+  {%- for n in range(1, page.pages + 1) %}{{ page_link(n, n, current=n == page.number, aria="Page " ~ n) }}{% endfor %}
+  {{ page_link(page.number + 1, "Next" ~ icon("chevron-right", "size-4"), disabled=page.number == page.pages, aria="Next page") }}
+</nav>
+{%- endif %}
+
+{%- if undated %}
+<details class="group mt-6"{% if not page.items %} open{% endif %}>
+  <summary class="flex cursor-pointer list-none items-center gap-2 rounded-lg py-2 text-section text-slate-900 select-none dark:text-white [&::-webkit-details-marker]:hidden">
+    {{ icon("chevron-right", "size-4 transition-transform group-open:rotate-90") }}
+    No date yet <span class="rounded-full bg-slate-100 px-2 text-small tabular-nums text-slate-700 dark:bg-slate-800 dark:text-slate-300">{{ undated | length }}</span>
+    <span class="text-small font-normal text-slate-600 dark:text-slate-400">no future deadline on the page yet</span>
+  </summary>
+  <div class="mt-3">{{ results(undated, "Opportunities with no date yet") }}</div>
+</details>
+{%- endif %}
+{%- endif %}
+
+{%- if oob %}
+<div id="chips" hx-swap-oob="true">{% include "_filter_chips.html" %}</div>
 {%- endif %}

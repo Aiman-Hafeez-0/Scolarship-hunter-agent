@@ -10,18 +10,24 @@ through `require_login` (see protected = APIRouter(...) below).
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from itertools import groupby
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app import auth, github, ui
+from app import auth, github, ics, ui
+from app.deadline_views import month_view, parse_month, week_groups
 from app.forms import (
     parse_profile_form,
     parse_source_form,
@@ -29,11 +35,8 @@ from app.forms import (
     robots_allows,
     source_yaml,
 )
+from app.merge import merge_deadlines, merge_rows, sources_of
 from app.queries import (
-    FUNDING_TYPES,
-    LOCATIONS,
-    MATCH_STATUSES,
-    NOT_MATCHED,
     OPPORTUNITY_TYPES,
     DashboardStore,
     PostgresDashboardStore,
@@ -46,8 +49,10 @@ from app.queries import (
     ScholarshipRow,
     SourceRow,
     UpcomingDeadline,
+    facets,
     filter_rows,
     match_counts,
+    paginate,
     parse_filters,
 )
 from pipeline.config import Settings
@@ -62,7 +67,8 @@ TEMPLATES.env.filters.update(pkt=ui.pkt, day=ui.day, label=ui.label, as_json=ui.
                              ago=ui.relative_time)  # fmt: skip
 TEMPLATES.env.globals.update(tone=ui.deadline_tone, days_left=ui.days_left,
                              countdown_text=ui.countdown_text, asset=ui.asset,
-                             field_errors=ui.field_errors)  # fmt: skip
+                             field_errors=ui.field_errors, funding_text=ui.funding_text,
+                             quote_link=ui.quote_link)  # fmt: skip
 
 
 # ---------- Dependencies ----------
@@ -344,18 +350,27 @@ class HomeSummary:
     run_overdue: bool  # no successful weekly run in the last 8 days
 
 
+def all_rows(store: DashboardStore, email: str, today: date) -> list[ScholarshipRow]:
+    """Every item, with duplicates shown once (see app/merge.py)."""
+    return merge_rows(store.scholarship_rows(store.profile_id(email), today))
+
+
+def upcoming(store: DashboardStore, today: date) -> list[UpcomingDeadline]:
+    return merge_deadlines(store.upcoming_deadlines(today, DEADLINES_PAGE_LIMIT))
+
+
 def home_summary(store: DashboardStore, email: str, today: date) -> HomeSummary:
-    rows = store.scholarship_rows(store.profile_id(email), today)
+    rows = all_rows(store, email, today)
     runs = store.runs(1)
     last_good = store.last_good_weekly_at()
     overdue = last_good is None or datetime.now(PKT) - last_good > WEEKLY_MAX_AGE
-    upcoming = store.upcoming_deadlines(today, DEADLINES_PAGE_LIMIT)
+    upcoming_all = upcoming(store, today)
     soon_until = today + timedelta(days=SOON_DAYS)
     review = filter_rows([r for r in rows if r.needs_review], parse_filters({}))
     return HomeSummary(
         match_counts=match_counts(rows),
-        upcoming=upcoming[:UPCOMING_ON_OVERVIEW],
-        deadlines_soon=sum(1 for d in upcoming if d.deadline_date <= soon_until),
+        upcoming=upcoming_all[:UPCOMING_ON_OVERVIEW],
+        deadlines_soon=sum(1 for d in upcoming_all if d.deadline_date <= soon_until),
         recent_changes=store.recent_changes(LIST_ON_OVERVIEW),
         needs_review=review[:LIST_ON_OVERVIEW],
         needs_review_total=len(review),
@@ -365,37 +380,29 @@ def home_summary(store: DashboardStore, email: str, today: date) -> HomeSummary:
     )
 
 
-@dataclass
-class MonthGroup:
-    title: str  # "January 2027"
-    deadlines: list[UpcomingDeadline]
-
-
-def by_month(deadlines: list[UpcomingDeadline]) -> list[MonthGroup]:
-    """Deadlines (already sorted by date) in groups, one per calendar month."""
-    return [
-        MonthGroup(month.strftime("%B %Y"), list(items))
-        for month, items in groupby(deadlines, key=lambda d: d.deadline_date.replace(day=1))
-    ]
-
-
 def scholarship_list(
     request: Request, store: DashboardStore, email: str, today: date
 ) -> list[ScholarshipRow]:
-    rows = store.scholarship_rows(store.profile_id(email), today)
-    return filter_rows(rows, parse_filters(request.query_params))
+    return filter_rows(all_rows(store, email, today), parse_filters(request.query_params))
+
+
+def opportunities_context(
+    request: Request, store: DashboardStore, email: str, today: date
+) -> dict[str, Any]:
+    """The list page: filter chips with counts, then one page of dated items (25), and the
+    items with no future deadline in a folded "No date yet" group on the last page."""
+    filters = parse_filters(request.query_params)
+    rows = all_rows(store, email, today)
+    kept = filter_rows(rows, filters)
+    dated = [r for r in kept if r.next_deadline is not None]
+    page = paginate(dated, filters.page)
+    undated = [r for r in kept if r.next_deadline is None] if page.number == page.pages else []
+    return {"f": filters, "facets": facets(rows, filters), "page": page, "undated": undated,
+            "total": len(kept), "today": today}  # fmt: skip
 
 
 def find_scholarship(store: DashboardStore, email: str, sid: str) -> ScholarshipDetail | None:
     return store.scholarship(store.profile_id(email), sid)
-
-
-FILTER_CHOICES = {
-    "types": OPPORTUNITY_TYPES,
-    "locations": LOCATIONS,
-    "match_statuses": (*MATCH_STATUSES, NOT_MATCHED),
-    "funding_types": FUNDING_TYPES,
-}
 
 
 # ---------- HTML pages ----------
@@ -414,9 +421,7 @@ def home(
 def scholarships(
     request: Request, user: UserDep, store: StoreDep, today: TodayDep, shell: ShellDep
 ) -> Response:
-    filters = parse_filters(request.query_params)
-    rows = scholarship_list(request, store, user, today)
-    context = {"rows": rows, "f": filters, "today": today, "shell": shell, **FILTER_CHOICES}
+    context = opportunities_context(request, store, user, today) | {"shell": shell}
     return render(request, "scholarships.html", context)
 
 
@@ -424,12 +429,11 @@ def scholarships(
 def scholarships_table(
     request: Request, user: UserDep, store: StoreDep, today: TodayDep
 ) -> Response:
-    """Only the table, for HTMX. The address bar is updated to the matching full page."""
-    filters = parse_filters(request.query_params)
-    rows = scholarship_list(request, store, user, today)
-    response = render(request, "_scholarship_table.html", {"rows": rows, "today": today})
-    query = urlencode(filters.as_query())
-    response.headers["HX-Push-Url"] = "/scholarships" + (f"?{query}" if query else "")
+    """Only the results (and, out of band, the filter chips with fresh counts), for HTMX.
+    The address bar is updated to the matching full page."""
+    context = opportunities_context(request, store, user, today) | {"oob": True}
+    response = render(request, "_scholarship_table.html", context)
+    response.headers["HX-Push-Url"] = context["f"].link(page=context["page"].number)
     return response
 
 
@@ -441,17 +445,49 @@ def scholarship_page(request: Request, sid: str, user: UserDep, store: StoreDep,
         context = {"title": "Not found", "message": "There is no scholarship with this id.",
                    "shell": shell}  # fmt: skip
         return render(request, "error.html", context, 404)
-    return render(request, "detail.html", {"d": detail, "today": today, "shell": shell})
+    rows = store.scholarship_rows(store.profile_id(user), today)
+    context = {"d": detail, "today": today, "shell": shell, "sources": sources_of(rows, sid)}
+    return render(request, "detail.html", context)
+
+
+@protected.get("/scholarships/{sid}/calendar.ics")
+def scholarship_calendar(sid: str, user: UserDep, store: StoreDep, d: int = 0) -> Response:
+    """Deadline number `d` of this item as an .ics file ("Add to calendar")."""
+    detail = find_scholarship(store, user, sid)
+    deadline = detail.deadlines[d] if detail and 0 <= d < len(detail.deadlines) else None
+    if detail is None or deadline is None or deadline.deadline_date is None:
+        return PlainTextResponse("No such deadline.", status_code=404)
+    day = deadline.deadline_date
+    body = ics.deadline_event(
+        uid=f"{detail.id}-{d}-{day.isoformat()}@scholarship-hunter", name=detail.name,
+        label=deadline.label, day=day, url=detail.application_url or detail.source_url,
+    )  # fmt: skip
+    disposition = f'attachment; filename="{ics.filename(detail.name, day)}"'
+    return Response(body, media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": disposition})  # fmt: skip
+
+
+DEADLINE_VIEWS = ("list", "calendar")
 
 
 @protected.get("/deadlines", response_class=HTMLResponse)
 def deadlines_page(
-    request: Request, store: StoreDep, today: TodayDep, shell: ShellDep
-) -> Response:
-    """Every upcoming deadline of an open item, grouped by month."""
-    upcoming = store.upcoming_deadlines(today, DEADLINES_PAGE_LIMIT)
-    return render(request, "deadlines.html", {"months": by_month(upcoming), "today": today,
-                                              "total": len(upcoming), "shell": shell})  # fmt: skip
+    request: Request, store: StoreDep, today: TodayDep, shell: ShellDep,
+    view: str = "list", type: str = "", month: str = "",
+) -> Response:  # fmt: skip
+    """Upcoming deadlines of open items: by week (list) or as a month calendar."""
+    every = upcoming(store, today)
+    kind = type if type in OPPORTUNITY_TYPES else ""
+    shown = [d for d in every if not kind or d.opportunity_type == kind]
+    counts = {t: sum(1 for d in every if d.opportunity_type == t) for t in OPPORTUNITY_TYPES}
+    view = view if view in DEADLINE_VIEWS else "list"
+    chosen = parse_month(month, today)
+    context = {
+        "shell": shell, "today": today, "view": view, "kind": kind, "counts": counts,
+        "total": len(every), "shown": len(shown), "weeks": week_groups(shown, today),
+        "cal": month_view(shown, chosen, today), "month_param": chosen.strftime("%Y-%m"),
+    }  # fmt: skip
+    return render(request, "deadlines.html", context)
 
 
 @protected.get("/runs", response_class=HTMLResponse)

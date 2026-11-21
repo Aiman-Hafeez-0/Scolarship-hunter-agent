@@ -9,9 +9,10 @@ import math
 import uuid
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any, Literal, Protocol
+from urllib.parse import urlencode
 
 from psycopg import errors
 
@@ -27,11 +28,22 @@ MATCH_STATUSES = ("eligible", "maybe", "not_eligible")
 NOT_MATCHED = "not_matched"
 FUNDING_TYPES = ("full", "partial", "tuition_only", "unknown")
 SORTS = ("deadline", "score")
+NO_FUNDING_TYPES = ("admission", "entry_test")  # they have no funding: shown as "—"
+PER_PAGE = 25
 
 Sort = Literal["deadline", "score"]
 
 
 # ---------- Rows ----------
+
+
+@dataclass
+class SourceLink:
+    """One official page an item was read from (a merged item has several)."""
+
+    scholarship_id: str
+    name: str
+    url: str
 
 
 @dataclass
@@ -52,6 +64,9 @@ class ScholarshipRow:
     next_deadline: date | None  # the closest deadline that is today or later
     match_status: str | None  # None: not matched yet
     score: int | None
+    source_name: str = ""
+    # Every page this item was read from; more than one after app.merge joined duplicates.
+    sources: list[SourceLink] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +77,7 @@ class UpcomingDeadline:
     deadline_date: date
     is_estimated: bool
     opportunity_type: str = "scholarship"
+    source_count: int = 1  # more than 1 after app.merge joined duplicates
 
 
 @dataclass
@@ -159,6 +175,9 @@ class ScholarshipDetail:
     documents: list[str]
     match: MatchInfo | None
     changes: list[ChangeEntry]
+    opportunity_type: str = "scholarship"
+    location: str = ""
+    country: str | None = None
 
 
 @dataclass
@@ -221,6 +240,7 @@ class Filters:
     deadline_before: date | None = None  # next deadline on or before this day
     include_closed: bool = False
     sort: Sort = "deadline"
+    page: int = 1
 
     def as_query(self) -> dict[str, str]:
         """The filters as URL query values (empty ones left out)."""
@@ -233,8 +253,16 @@ class Filters:
             "deadline_before": self.deadline_before.isoformat() if self.deadline_before else "",
             "include_closed": "1" if self.include_closed else "",
             "sort": self.sort if self.sort != "deadline" else "",
+            "page": str(self.page) if self.page > 1 else "",
         }
         return {key: value for key, value in values.items() if value}
+
+    def link(self, **changes: Any) -> str:
+        """The list page with some filters changed, e.g. f.link(location="pakistan").
+        Any change other than the page goes back to page 1."""
+        changed = replace(self, **({"page": 1} | changes))
+        query = urlencode(changed.as_query())
+        return "/scholarships" + (f"?{query}" if query else "")
 
 
 def _choice(value: str | None, allowed: tuple[str, ...]) -> str | None:
@@ -248,6 +276,7 @@ def parse_filters(params: Mapping[str, str]) -> Filters:
     except ValueError:
         before = None
     sort = params.get("sort")
+    page = params.get("page", "")
     return Filters(
         q=params.get("q", "").strip()[:100],
         opportunity_type=_choice(params.get("type"), OPPORTUNITY_TYPES),
@@ -257,6 +286,7 @@ def parse_filters(params: Mapping[str, str]) -> Filters:
         deadline_before=before,
         include_closed=params.get("include_closed") in ("1", "on", "true"),
         sort="score" if sort == "score" else "deadline",
+        page=max(1, min(int(page), 10_000)) if page.isdigit() else 1,
     )
 
 
@@ -269,7 +299,8 @@ def _matches(row: ScholarshipRow, f: Filters) -> bool:
         return False
     if f.match and (row.match_status or NOT_MATCHED) != f.match:
         return False
-    if f.funding and row.funding != f.funding:
+    # Funding only means something for scholarships (admissions and tests show "—").
+    if f.funding and (row.opportunity_type in NO_FUNDING_TYPES or row.funding != f.funding):
         return False
     if f.deadline_before and (row.next_deadline is None or row.next_deadline > f.deadline_before):
         return False
@@ -289,6 +320,83 @@ def filter_rows(rows: list[ScholarshipRow], f: Filters) -> list[ScholarshipRow]:
     return sorted(
         kept, key=lambda r: (r.next_deadline is None, r.next_deadline or date.max, r.name.lower())
     )
+
+
+@dataclass
+class FacetOption:
+    value: str  # "" for "All"
+    text: str
+    count: int
+    selected: bool
+
+
+@dataclass
+class Facet:
+    """One group of filter chips, e.g. Type: All 12 · Scholarship 7 · Admission 3 ..."""
+
+    name: str  # the URL parameter
+    label: str
+    options: list[FacetOption]
+
+
+# (URL parameter, Filters field, label, values with their chip text)
+FACETS: list[tuple[str, str, str, list[tuple[str, str]]]] = [
+    ("type", "opportunity_type", "Type",
+     [("scholarship", "Scholarship"), ("admission", "Admission"), ("entry_test", "Entry test")]),
+    ("location", "location", "Location", [("abroad", "Abroad"), ("pakistan", "Pakistan")]),
+    ("match", "match", "Match",
+     [("eligible", "Eligible"), ("maybe", "Maybe"), ("not_eligible", "Not eligible"),
+      ("not_matched", "Not matched")]),
+    ("funding", "funding", "Funding",
+     [("full", "Full"), ("partial", "Partial"), ("tuition_only", "Tuition only"),
+      ("unknown", "Unknown")]),
+]  # fmt: skip
+
+
+def _facet_value(row: ScholarshipRow, attr: str) -> str | None:
+    if attr == "match":
+        return row.match_status or NOT_MATCHED
+    if attr == "funding":
+        return None if row.opportunity_type in NO_FUNDING_TYPES else row.funding
+    return str(getattr(row, attr))
+
+
+def facets(rows: list[ScholarshipRow], f: Filters) -> list[Facet]:
+    """The filter chips with counts. Each group counts the rows that pass every OTHER filter,
+    so a count says how many results you get when you click that chip."""
+    result = []
+    for name, attr, label, values in FACETS:
+        blank: dict[str, Any] = {attr: None}
+        others = replace(f, **blank)
+        counts = Counter(_facet_value(row, attr) for row in rows if _matches(row, others))
+        current = getattr(f, attr)
+        total = sum(n for value, n in counts.items() if value is not None)
+        options = [FacetOption("", "All", total, current is None)]
+        options += [FacetOption(value, text, counts.get(value, 0), current == value)
+                    for value, text in values]  # fmt: skip
+        result.append(Facet(name, label, options))
+    return result
+
+
+@dataclass
+class Page:
+    """One page of a list: items, which page, how many pages."""
+
+    items: list[ScholarshipRow]
+    number: int
+    pages: int
+    total: int
+    first: int  # position of the first item on this page (1-based; 0 when empty)
+    last: int
+
+
+def paginate(items: list[ScholarshipRow], number: int, per_page: int = PER_PAGE) -> Page:
+    """Page `number` (1-based) of the items. A page past the end shows the last page."""
+    pages = max(1, math.ceil(len(items) / per_page))
+    number = min(max(1, number), pages)
+    start = (number - 1) * per_page
+    chunk = items[start : start + per_page]
+    return Page(chunk, number, pages, len(items), start + 1 if chunk else 0, start + len(chunk))
 
 
 def match_counts(rows: list[ScholarshipRow]) -> dict[str, int]:
@@ -351,7 +459,7 @@ select s.id, s.name, s.provider, s.opportunity_type, s.location, s.country, s.fu
        s.status::text, s.needs_review, s.verified_at is not null, src.url,
        (select min(d.deadline_date) from deadlines d
         where d.scholarship_id = s.id and d.deadline_date >= %(today)s),
-       m.status::text, m.score
+       m.status::text, m.score, src.name
 from scholarships s
 join sources src on src.id = s.source_id
 left join matches m on m.scholarship_id = s.id and m.profile_id = %(profile_id)s::uuid
@@ -395,7 +503,7 @@ class PostgresDashboardStore:
                 location=str(r[4]), country=r[5], funding=str(r[6]), status=str(r[7]),
                 needs_review=bool(r[8]), verified=bool(r[9]), source_url=str(r[10]),
                 next_deadline=r[11], match_status=r[12],
-                score=None if r[13] is None else int(str(r[13])),
+                score=None if r[13] is None else int(str(r[13])), source_name=str(r[14]),
             )
             for r in rows
         ]  # fmt: skip
@@ -508,6 +616,8 @@ class PostgresDashboardStore:
             extracted_at=row["extracted_at"], extraction_version=row["extraction_version"],
             fields=build_fields(row, evidence), deadlines=deadlines, requirements=requirements,
             documents=documents, match=match, changes=changes,
+            opportunity_type=str(row["opportunity_type"]), location=str(row["location"]),
+            country=row["country"],
         )  # fmt: skip
 
     def runs(self, limit: int) -> list[RunRow]:

@@ -27,6 +27,24 @@
     applyTheme(next);
   }
 
+  // ---------- Opportunities: table or card view (saved in localStorage) ----------
+
+  var VIEW_KEY = "opportunities-view";
+
+  function applyView(view) {
+    var box = document.getElementById("opps");
+    if (!box) return;
+    view = view === "cards" ? "cards" : "table";
+    box.setAttribute("data-view", view);
+    document.querySelectorAll("[data-view-toggle]").forEach(function (button) {
+      button.setAttribute("aria-pressed", button.getAttribute("data-view-toggle") === view ? "true" : "false");
+    });
+  }
+
+  function savedView() {
+    try { return localStorage.getItem(VIEW_KEY); } catch (e) { return null; }
+  }
+
   // ---------- Toasts ----------
 
   var TOAST_MS = 6000;
@@ -92,6 +110,13 @@
     }
     if (target.closest("[data-theme-toggle]")) {
       toggleTheme();
+      return;
+    }
+    var viewButton = target.closest("[data-view-toggle]");
+    if (viewButton) {
+      var view = viewButton.getAttribute("data-view-toggle");
+      try { localStorage.setItem(VIEW_KEY, view); } catch (e) { /* not saved */ }
+      applyView(view);
       return;
     }
     var dismiss = target.closest("[data-dismiss-toast]");
@@ -204,6 +229,7 @@
 
   function start() {
     applyTheme(savedTheme());
+    applyView(savedView());
     armToasts(document);
     document.querySelectorAll("dialog[data-open-on-load]").forEach(function (dialog) {
       openDialog(dialog.id);

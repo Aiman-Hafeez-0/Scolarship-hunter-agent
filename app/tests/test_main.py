@@ -268,8 +268,10 @@ def test_csrf_token_in_header_is_accepted(logged_in: TestClient) -> None:
 
 
 def test_home_shows_counts_deadlines_and_last_run(logged_in: TestClient, store: FakeStore) -> None:
-    store.rows = [row(id="a", match_status="eligible"), row(id="b", match_status="maybe"),
-                  row(id="c", match_status=None), row(id="d", status="closed")]  # fmt: skip
+    store.rows = [row(id="a", name="A", match_status="eligible"),
+                  row(id="b", name="B", match_status="maybe"),
+                  row(id="c", name="C", match_status=None),
+                  row(id="d", name="D", status="closed")]  # fmt: skip
     store.upcoming = [
         UpcomingDeadline(SID, "Soon Scholarship", "Apply", TODAY + timedelta(days=5), False),
         UpcomingDeadline(SID, "Later Admission", "Apply", TODAY + timedelta(days=20), False),
@@ -352,7 +354,7 @@ def test_scholarships_page_shows_the_form_and_table(
 ) -> None:
     page = logged_in.get("/scholarships?location=pakistan").text
     assert 'hx-get="/scholarships/table"' in page
-    assert 'value="pakistan" selected' in page
+    assert 'value="pakistan" checked' in page  # the Location chip
     assert "NUST MS" in page and "Hungary Grant" not in page
     assert "<html" in page
 

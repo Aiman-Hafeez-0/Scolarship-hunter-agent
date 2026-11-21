@@ -100,6 +100,30 @@ All live in `app/templates/components/`. Import what a page needs, for example
 | `dialog.html` | `confirm_dialog` | A `<dialog>` that asks "Are you sure?" before an action (used by Run now). |
 | `time.html` | `rel_time`, `exact_time` | "2 hours ago" with the exact PKT time on hover (`<time title=...>`). |
 
+## Page patterns
+
+- **Filter chips** (`_filter_chips.html`): one group per filter (Type, Location, Match,
+  Funding), each chip with its count. A count says how many results that chip gives with the
+  other filters kept. The chosen chip uses the accent fill. Chips are radio buttons, so the
+  keyboard and the no-JavaScript form both work.
+- **Table or cards**: list pages may offer both; the toggle is remembered in `localStorage`
+  (`opportunities-view`). Phones always get cards. The whole row or card is clickable; the
+  name inside stays a real link for keyboards.
+- **Pagination**: 25 per page, page links at the bottom. Items without a future deadline go
+  into a folded "No date yet" group after the last page.
+- **Missing values**: "—" when a field cannot apply (funding of an admission or entry test);
+  "not stated" when it could apply but the page did not say.
+- **Duplicates**: an item found on two official pages is shown once, with a "2 sources"
+  badge and both links (see `app/merge.py`).
+- **Detail page**: a header card (type and location badges, name as the only `<h1>`, match,
+  "Open official page" and "I checked this", and a big countdown colored by the deadline
+  rule), then section links and sections: Deadlines as a vertical timeline, Eligibility as a
+  checklist (✓ pass, ✗ fail, ? not sure, always with words for screen readers), Funding and
+  coverage, Requirements and documents, Key facts, Evidence (every quote, with a link that
+  highlights it on the official page), History.
+- **Calendar**: a Monday-first month grid on wide screens; phones get the list of busy days.
+  Entries are chips colored by the deadline rule.
+
 ## Rules for every page
 
 - **Time:** every date and time is shown in Pakistan time (PKT). Times in the past are shown

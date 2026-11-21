@@ -1,31 +1,95 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon %}
-{% from "components/badges.html" import badge, countdown, match_badge, review_badge, closed_badge %}
-{% from "components/buttons.html" import link_button %}
-{% from "components/cards.html" import card, callout %}
+{% from "components/badges.html" import badge, countdown, match_badge, review_badge, closed_badge, type_badge, TONES %}
+{% from "components/buttons.html" import btn, link_button %}
+{% from "components/cards.html" import card, callout, SURFACE %}
 {% from "components/time.html" import rel_time %}
-{% from "_parts.html" import quote_box, verify_box %}
+{% from "_parts.html" import quote_box, verify_box, sources_badge %}
 {% set active = "opportunities" %}
 {% set title = d.name %}
+{% set heading_in_page = true %}
 {% set crumbs = [("Opportunities", "/scholarships")] %}
-{% set OUTCOME = {"pass": "green", "fail": "red"} %}
+{% set no_funding = d.opportunity_type in ("admission", "entry_test") %}
+{% set links = sources if sources else [{"name": d.source_name, "url": d.source_url}] %}
+{% set official = d.application_url or d.source_url %}
+{% set by_label = {} %}{% for f in d.fields %}{% set _ = by_label.update({f.label: f}) %}{% endfor %}
+{% set FUNDING_LABELS = ("Funding", "Coverage", "Application fee") %}
+{% set SKIP_IN_FACTS = ("Type", "Location", "Funding", "Coverage", "Application fee") %}
+{#- The next deadline that is today or later (deadlines come sorted by date). -#}
+{% set nx = namespace(item=none, index=none) %}
+{% for dl in d.deadlines %}{% if nx.item is none and dl.deadline_date and dl.deadline_date >= today %}{% set nx.item = dl %}{% set nx.index = loop.index0 %}{% endif %}{% endfor %}
+{#- Every quote on this page, for the Evidence section. -#}
+{% set evidence = [] %}
+{% for dl in d.deadlines %}{% if dl.quote %}{% set _ = evidence.append(("Deadline: " ~ dl.label, dl.quote)) %}{% endif %}{% endfor %}
+{% for f in d.fields %}{% for q in f.quotes %}{% set _ = evidence.append((f.label, q)) %}{% endfor %}{% endfor %}
+{% for r in d.requirements %}{% if r.quote %}{% set _ = evidence.append(("Requirement: " ~ (r.kind | label), r.quote)) %}{% endif %}{% endfor %}
+{% set SECTIONS = [("deadlines", "Deadlines"), ("eligibility", "Eligibility"), ("funding", "Funding"), ("requirements", "Requirements"), ("facts", "Key facts"), ("evidence", "Evidence"), ("history", "History")] %}
+
+{% macro section(id, heading, icon_name, count=None) -%}
+<section id="{{ id }}" aria-labelledby="{{ id }}-title" class="{{ SURFACE }} scroll-mt-28">
+  <header class="flex items-center gap-2.5 border-b border-slate-100 px-4 py-3.5 sm:px-5 dark:border-slate-800">
+    {{ icon(icon_name, "size-5 text-teal-700 dark:text-teal-400") }}
+    <h2 id="{{ id }}-title" class="text-section">{{ heading }}</h2>
+    {%- if count is not none %}<span class="rounded-full bg-slate-100 px-2 text-small tabular-nums text-slate-700 dark:bg-slate-800 dark:text-slate-300">{{ count }}</span>{% endif %}
+  </header>
+  <div class="px-4 py-4 sm:px-5">{{ caller() }}</div>
+</section>
+{%- endmacro %}
+
+{% macro value_or_dash(field) -%}
+{%- if field and field.value %}{{ field.value }}{% else %}<span class="text-slate-600 dark:text-slate-400">not stated</span>{% endif -%}
+{%- endmacro %}
+
 {% block content %}
-<section aria-label="Summary" class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-  <div class="min-w-0 space-y-3">
-    <div class="flex flex-wrap items-center gap-2">
-      {%- if d.match %}{{ match_badge(d.match.status) }}<span class="text-small tabular-nums text-slate-700 dark:text-slate-300">score <span class="font-bold">{{ d.match.score }}</span>/100</span>{% else %}{{ match_badge(none) }}{% endif %}
-      {%- if d.status == 'closed' %}{{ closed_badge() }}{% endif %}
-      {%- if d.needs_review %}{{ review_badge() }}{% endif %}
+{#- ---------- Header ---------- -#}
+<section aria-labelledby="page-title" class="{{ SURFACE }} mb-6 p-4 sm:p-6">
+  <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-1.5">
+        {{ type_badge(d.opportunity_type) }}
+        {%- if d.location or d.country %}{{ badge(((d.location | capitalize) ~ (" · " if d.location and d.country else "") ~ (d.country or "")), "outline", "location", "globe") }}{% endif %}
+        {%- if d.status == 'closed' %}{{ closed_badge() }}{% endif %}
+        {%- if d.needs_review %}{{ review_badge() }}{% endif %}
+        {{ sources_badge(sources) }}
+      </div>
+      <h1 id="page-title" class="mt-3 text-2xl font-bold tracking-tight break-words text-slate-900 sm:text-3xl dark:text-white">{{ d.name }}</h1>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        {%- if d.match %}{{ match_badge(d.match.status) }}<span class="text-small tabular-nums text-slate-700 dark:text-slate-300">match score <span class="font-bold">{{ d.match.score }}</span>/100</span>
+        {%- else %}{{ match_badge(none) }}{% endif %}
+      </div>
+      <p class="mt-3 text-small font-normal text-slate-600 dark:text-slate-400">
+        {{ "Sources" if links | length > 1 else "Source" }}:
+        {%- for s in links %} <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="font-semibold break-all text-teal-700 hover:underline dark:text-teal-400">{{ s.name }}</a>{% if not loop.last %} and{% endif %}{% endfor %}
+        · read from the page {{ rel_time(d.extracted_at) }}{% if d.extraction_version %} <span class="break-all">({{ d.extraction_version }})</span>{% endif %}
+      </p>
+      <div class="mt-5 flex flex-wrap items-center gap-3">
+        {{ link_button("Open official page", official, "primary", "md", None, external=True) }}
+        {{ verify_box(d.id, d.verified_at, csrf_token) }}
+      </div>
     </div>
-    {{ verify_box(d.id, d.verified_at, csrf_token) }}
-    <p class="text-small font-normal text-slate-600 dark:text-slate-400">
-      Source: <a href="{{ d.source_url }}" target="_blank" rel="noopener noreferrer" class="font-semibold break-all text-teal-700 hover:underline dark:text-teal-400">{{ d.source_name }}</a>
-      · read from the page {{ rel_time(d.extracted_at) }}{% if d.extraction_version %} <span class="break-all">({{ d.extraction_version }})</span>{% endif %}
-    </p>
+
+    {#- The big countdown. -#}
+    {%- if nx.item %}
+    {%- set days = days_left(nx.item.deadline_date, today) %}
+    <div class="shrink-0 rounded-xl px-6 py-5 text-center ring-1 ring-inset lg:w-60 {{ TONES[tone(days)] }}" data-badge="big-countdown" data-tone="{{ tone(days) }}">
+      <p class="text-small">Next deadline</p>
+      {%- if days == 0 %}
+      <p class="mt-1 text-5xl font-bold tracking-tight">Today</p>
+      {%- else %}
+      <p class="mt-1 text-5xl font-bold tracking-tight tabular-nums">{{ days }}</p>
+      <p class="text-section">day{{ '' if days == 1 else 's' }} left</p>
+      {%- endif %}
+      <p class="mt-2 text-small font-normal">{{ nx.item.label }}{% if nx.item.is_estimated %} (estimated){% endif %}<br><span class="font-semibold tabular-nums">{{ nx.item.deadline_date | day }}</span></p>
+      <a href="/scholarships/{{ d.id }}/calendar.ics?d={{ nx.index }}" download class="{{ btn('secondary', 'sm') }} mt-3 w-full">{{ icon("calendar", "size-4") }}Add to calendar</a>
+    </div>
+    {%- else %}
+    <div class="shrink-0 rounded-xl px-6 py-5 text-center ring-1 ring-inset lg:w-60 {{ TONES['gray'] }}" data-badge="big-countdown" data-tone="gray">
+      <p class="text-small">Next deadline</p>
+      <p class="mt-1 text-2xl font-bold">No date yet</p>
+      <p class="mt-1 text-small font-normal">The page shows no future deadline.</p>
+    </div>
+    {%- endif %}
   </div>
-  {%- if d.application_url %}
-  <div class="shrink-0">{{ link_button("Apply / official page", d.application_url, "primary", "md", None, external=True) }}</div>
-  {%- endif %}
 </section>
 
 {%- if d.needs_review and d.review_notes %}
@@ -35,87 +99,148 @@
 {% endcall %}
 {%- endif %}
 
-<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-  <div class="min-w-0 space-y-6 lg:col-span-2">
-    {% call card("Deadlines", flush=True) %}
+{#- Jump to a section. -#}
+<nav aria-label="Sections" class="mb-6 -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0 lg:sticky lg:top-[4.75rem] lg:z-20">
+  <ul class="flex w-max gap-1 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-xs backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+    {%- for id, text in SECTIONS %}
+    <li><a href="#{{ id }}" class="block rounded-lg px-3 py-1.5 text-small whitespace-nowrap text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">{{ text }}</a></li>
+    {%- endfor %}
+  </ul>
+</nav>
+
+<div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
+  <div class="min-w-0 space-y-6 lg:col-span-3">
+    {#- ---------- Deadlines: a vertical timeline ---------- -#}
+    {% call section("deadlines", "Deadlines", "calendar-clock", d.deadlines | length) %}
       {%- if d.deadlines %}
-      <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+      <ol class="relative ml-2 border-l-2 border-slate-200 dark:border-slate-700">
         {%- for dl in d.deadlines %}
-        <li class="px-4 py-3 sm:px-5">
+        {%- set future = dl.deadline_date and dl.deadline_date >= today %}
+        {%- set t = tone(days_left(dl.deadline_date, today)) if future else "gray" %}
+        <li class="relative pb-6 pl-6 last:pb-0">
+          <span aria-hidden="true" class="absolute -left-[0.5625rem] top-1 size-4 rounded-full ring-4 ring-white dark:ring-slate-900
+            {{ {'red': 'bg-red-600', 'amber': 'bg-amber-500', 'gray': 'bg-teal-700 dark:bg-teal-400' if future else 'bg-slate-300 dark:bg-slate-600'}[t] }}"></span>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-semibold text-slate-900 dark:text-white">{{ dl.label }}</span>
-            <span class="tabular-nums text-slate-700 dark:text-slate-300">{{ dl.deadline_date | day }}</span>
-            {%- if dl.deadline_date and dl.deadline_date >= today %}{{ countdown(dl.deadline_date, today) }}
+            <span class="font-bold tabular-nums text-slate-900 dark:text-white">{{ dl.deadline_date | day }}</span>
+            {%- if future %}{{ countdown(dl.deadline_date, today) }}
             {%- elif dl.deadline_date %}{{ badge("passed", "gray", "passed") }}{% endif %}
-            {%- if dl.is_estimated %}<span class="text-small font-normal text-slate-600 dark:text-slate-400">(estimated)</span>{% endif %}
           </div>
-          {%- if dl.timezone_note %}<p class="mt-0.5 text-small font-normal text-slate-600 dark:text-slate-400">{{ dl.timezone_note }}</p>{% endif %}
+          <p class="mt-0.5 font-semibold text-slate-800 dark:text-slate-200">{{ dl.label }}{% if dl.is_estimated %} <span class="text-small font-normal text-slate-600 dark:text-slate-400">(estimated)</span>{% endif %}</p>
+          {%- if dl.timezone_note %}<p class="text-small font-normal text-slate-600 dark:text-slate-400">{{ dl.timezone_note }}</p>{% endif %}
           {%- if dl.quote %}{{ quote_box(dl.quote) }}{% else %}<p class="mt-1 text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
+          {%- if future %}
+          <a href="/scholarships/{{ d.id }}/calendar.ics?d={{ loop.index0 }}" download class="mt-2 inline-flex items-center gap-1.5 rounded text-small font-semibold text-teal-700 hover:underline dark:text-teal-400">{{ icon("calendar", "size-3.5") }}Add to calendar</a>
+          {%- endif %}
+        </li>
+        {%- endfor %}
+      </ol>
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">No deadlines found on the page.</p>{% endif %}
+    {% endcall %}
+
+    {#- ---------- Eligibility: the matching rules as a checklist ---------- -#}
+    {% call section("eligibility", "Eligibility", "list-checks") %}
+      {%- if d.match and d.match.reasons %}
+      {%- set passed = d.match.reasons | selectattr("outcome", "equalto", "pass") | list | length %}
+      <p class="mb-4 text-small font-normal text-slate-600 dark:text-slate-400">{{ passed }} of {{ d.match.reasons | length }} rules pass · matched {{ rel_time(d.match.computed_at) }}</p>
+      <ul class="space-y-4">
+        {%- for r in d.match.reasons %}
+        {%- set kind = r.outcome if r.outcome in ("pass", "fail") else "unknown" %}
+        <li class="flex gap-3" data-outcome="{{ kind }}">
+          <span class="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full
+            {{ {'pass': 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-200', 'fail': 'bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-200', 'unknown': 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}[kind] }}" aria-hidden="true">
+            {{- icon({'pass': 'check', 'fail': 'x', 'unknown': 'circle-help'}[kind], "size-4") -}}
+          </span>
+          <div class="min-w-0">
+            <p class="font-semibold text-slate-900 dark:text-white"><span class="sr-only">{{ {'pass': 'Passes', 'fail': 'Fails', 'unknown': 'Not sure'}[kind] }}: </span>{{ r.rule | label | capitalize }}</p>
+            <p class="text-body text-slate-700 dark:text-slate-300">{{ r.reason }}</p>
+            {%- if r.action %}<p class="mt-1 flex items-start gap-1.5 text-body font-semibold text-teal-800 dark:text-teal-300">{{ icon("arrow-right", "mt-1 size-4") }}{{ r.action }}</p>{% endif %}
+          </div>
         </li>
         {%- endfor %}
       </ul>
-      {%- else %}<p class="border-t border-slate-100 px-4 py-4 text-body text-slate-600 sm:px-5 dark:border-slate-800 dark:text-slate-400">No deadlines found on the page.</p>{% endif %}
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">Not matched against your profile yet. The next run does it.</p>{% endif %}
     {% endcall %}
 
-    {% call card("Details", flush=True) %}
-      <dl class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
-        {%- for field in d.fields %}
-        <div class="grid grid-cols-1 gap-1 px-4 py-3 sm:grid-cols-3 sm:gap-4 sm:px-5">
-          <dt class="text-small text-slate-600 dark:text-slate-400">{{ field.label }}</dt>
-          <dd class="min-w-0 text-body break-words text-slate-900 sm:col-span-2 dark:text-slate-100">
-            {%- if field.value %}{{ field.value | label | capitalize if field.label in ('Type', 'Funding', 'Location', 'Status') else field.value }}
-            {%- else %}<span class="text-slate-600 dark:text-slate-400">not stated</span>{% endif %}
-            {%- for q in field.quotes %}{{ quote_box(q) }}{% endfor %}
-            {%- if field.value and field.has_evidence and not field.quotes %}<p class="text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
+    {#- ---------- Funding and coverage ---------- -#}
+    {% call section("funding", "Funding and coverage", "sparkles") %}
+      <dl class="divide-y divide-slate-100 dark:divide-slate-800">
+        {%- for name in FUNDING_LABELS %}
+        {%- set field = by_label.get(name) %}
+        <div class="grid grid-cols-1 gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-3 sm:gap-4">
+          <dt class="text-small text-slate-600 dark:text-slate-400">{{ name }}</dt>
+          <dd class="min-w-0 text-body break-words sm:col-span-2" data-field="{{ name | lower | replace(' ', '-') }}">
+            {%- if no_funding and name != "Application fee" %}{{ funding_text(d.opportunity_type, none) }}
+            {%- if name == "Funding" %}<p class="text-small font-normal text-slate-600 dark:text-slate-400">Admissions and entry tests are about a place, not money.</p>{% endif %}
+            {%- else %}
+            {{- (field.value | label | capitalize) if (name == "Funding" and field and field.value) else value_or_dash(field) }}
+            {%- if field %}{% for q in field.quotes %}{{ quote_box(q) }}{% endfor %}{% endif %}
+            {%- endif %}
           </dd>
         </div>
         {%- endfor %}
       </dl>
     {% endcall %}
 
-    {% call card("Requirements", flush=True) %}
+    {#- ---------- Requirements and documents ---------- -#}
+    {% call section("requirements", "Requirements and documents", "file-text") %}
       {%- if d.requirements %}
-      <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+      <ul class="divide-y divide-slate-100 dark:divide-slate-800">
         {%- for r in d.requirements %}
-        <li class="px-4 py-3 text-body sm:px-5">
+        <li class="py-3 text-body first:pt-0">
           <span class="font-semibold text-slate-900 dark:text-white">{{ r.kind | label | capitalize }}</span>{% if r.value %}: {{ r.value }}{% endif %}
           {%- if r.description %}<p class="text-slate-700 dark:text-slate-300">{{ r.description }}</p>{% endif %}
           {%- if r.quote %}{{ quote_box(r.quote) }}{% else %}<p class="mt-1 text-small font-normal text-slate-600 dark:text-slate-400">no quote saved</p>{% endif %}
         </li>
         {%- endfor %}
       </ul>
-      {%- else %}<p class="border-t border-slate-100 px-4 py-4 text-body text-slate-600 sm:px-5 dark:border-slate-800 dark:text-slate-400">No requirements found on the page.</p>{% endif %}
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">No requirements found on the page.</p>{% endif %}
       {%- if d.documents %}
-      <div class="border-t border-slate-100 px-4 py-4 sm:px-5 dark:border-slate-800">
-        <h3 class="text-small text-slate-800 dark:text-slate-200">Documents to prepare</h3>
-        <ul class="mt-2 space-y-1.5">
-          {%- for doc in d.documents %}<li class="flex items-center gap-2 text-body">{{ icon("file-text", "size-4 text-slate-500 dark:text-slate-400") }}{{ doc }}</li>{% endfor %}
-        </ul>
-      </div>
+      <h3 class="mt-5 text-small text-slate-800 dark:text-slate-200">Documents to prepare</h3>
+      <ul class="mt-2 space-y-1.5">
+        {%- for doc in d.documents %}<li class="flex items-center gap-2 text-body">{{ icon("file-text", "size-4 text-slate-500 dark:text-slate-400") }}{{ doc }}</li>{% endfor %}
+      </ul>
       {%- endif %}
     {% endcall %}
   </div>
 
-  <div class="min-w-0 space-y-6">
-    {% call card("Why this match") %}
-      {%- if d.match and d.match.reasons %}
+  <div class="min-w-0 space-y-6 lg:col-span-2">
+    {#- ---------- Key facts (everything else the page said) ---------- -#}
+    {% call section("facts", "Key facts", "info") %}
+      <dl class="divide-y divide-slate-100 dark:divide-slate-800">
+        {%- for field in d.fields if field.label not in SKIP_IN_FACTS %}
+        <div class="grid grid-cols-5 gap-3 py-2.5 first:pt-0 last:pb-0">
+          <dt class="col-span-2 text-small text-slate-600 dark:text-slate-400">{{ field.label }}</dt>
+          <dd class="col-span-3 min-w-0 text-body break-words">
+            {%- if field.value %}{{ field.value | label | capitalize if field.label == 'Status' else field.value }}{% else %}<span class="text-slate-600 dark:text-slate-400">not stated</span>{% endif %}
+            {%- for q in field.quotes %}{{ quote_box(q) }}{% endfor %}
+          </dd>
+        </div>
+        {%- endfor %}
+      </dl>
+    {% endcall %}
+
+    {#- ---------- Evidence: every quote, with a link to it on the page ---------- -#}
+    {% call section("evidence", "Evidence", "quote", evidence | length) %}
+      {%- if evidence %}
       <ul class="space-y-4">
-        {%- for r in d.match.reasons %}
+        {%- for what, q in evidence %}
         <li>
-          <div class="flex items-center gap-2">
-            {{ badge(r.outcome, OUTCOME.get(r.outcome, "gray"), "outcome") }}
-            <span class="font-semibold text-slate-900 dark:text-white">{{ r.rule | label | capitalize }}</span>
-          </div>
-          <p class="mt-1 text-body text-slate-700 dark:text-slate-300">{{ r.reason }}</p>
-          {%- if r.action %}<p class="mt-1 flex items-start gap-1.5 text-body font-semibold text-teal-800 dark:text-teal-300">{{ icon("arrow-right", "mt-1 size-4") }}{{ r.action }}</p>{% endif %}
+          <figure>
+            <blockquote class="rounded-r-lg border-l-4 border-teal-600 bg-slate-50 px-3 py-2 text-body text-slate-800 dark:border-teal-400 dark:bg-slate-800/60 dark:text-slate-200">"{{ q.text }}"</blockquote>
+            <figcaption class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-small font-normal text-slate-600 dark:text-slate-400">
+              <span class="font-semibold text-slate-800 dark:text-slate-200">{{ what }}</span>
+              {%- if q.score is not none %}<span>· match {{ q.score }}%</span>{% endif %}
+              <span>·</span><a href="{{ quote_link(d.source_url, q.text) }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 font-semibold text-teal-700 hover:underline dark:text-teal-400">See it on {{ d.source_name }}{{ icon("external-link", "size-3.5") }}<span class="sr-only"> (opens in a new tab)</span></a>
+            </figcaption>
+          </figure>
         </li>
         {%- endfor %}
       </ul>
-      <p class="mt-4 text-small font-normal text-slate-600 dark:text-slate-400">Matched {{ rel_time(d.match.computed_at) }}</p>
-      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">Not matched against your profile yet. The next run does it.</p>{% endif %}
+      {%- else %}<p class="text-body text-slate-600 dark:text-slate-400">No quotes were saved for this item.</p>{% endif %}
     {% endcall %}
 
-    {% call card("Change history") %}
+    {#- ---------- History of changes ---------- -#}
+    {% call section("history", "History of changes", "history", d.changes | length) %}
       {%- if d.changes %}
       <ol class="space-y-4">
         {%- for c in d.changes %}

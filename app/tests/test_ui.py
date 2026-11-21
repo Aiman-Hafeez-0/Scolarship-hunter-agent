@@ -56,6 +56,25 @@ def test_countdown_text() -> None:
     assert ui.days_left(date(2026, 11, 20), date(2026, 11, 19)) == 1
 
 
+def test_funding_text_is_a_dash_for_tests_and_admissions() -> None:
+    assert ui.funding_text("scholarship", "tuition_only") == "Tuition only"
+    assert ui.funding_text("admission", "unknown") == "—"
+    assert ui.funding_text("entry_test", None) == "—"
+
+
+def test_quote_link_highlights_the_quote_on_the_page() -> None:
+    url = "https://example.org/page#top"
+    assert ui.quote_link(url, "Apply by 15 Jan-2027.") == (
+        "https://example.org/page#:~:text=Apply%20by%2015%20Jan%2D2027."
+    )
+    long = "one two three four five six seven eight nine ten eleven twelve thirteen"
+    assert ui.quote_link(url, long) == (
+        "https://example.org/page#:~:text=one%20two%20three%20four%20five,"
+        "nine%20ten%20eleven%20twelve%20thirteen"
+    )
+    assert ui.quote_link(url, "  ") == url
+
+
 def test_initial() -> None:
     assert ui.initial("owner@example.com") == "O"
     assert ui.initial("_9lives@example.com") == "9"

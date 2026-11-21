@@ -82,6 +82,24 @@
   }
 }
 
+/* Opportunities: table view or card view (app.js sets data-view and remembers it).
+   Outside any @layer on purpose, so these rules win over the utility classes.
+   Phones always show cards. */
+@media (width >= 40rem) {
+  #opps[data-view="cards"] .opp-table {
+    display: none;
+  }
+  #opps[data-view="cards"] .opp-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (width >= 80rem) {
+  #opps[data-view="cards"] .opp-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @keyframes slide-in-right {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }

@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from pipeline.notify.deadlines import PKT
 
@@ -68,6 +69,41 @@ def relative_time(value: datetime, now: datetime | None = None) -> str:
         else:
             text = _plural(days // 365, "year")
     return f"in {text}" if future else f"{text} ago"
+
+
+NO_FUNDING_TYPES = ("admission", "entry_test")
+DASH = "—"
+
+
+def funding_text(opportunity_type: str, funding: str | None) -> str:
+    """'Full', 'Tuition only', ...; admissions and entry tests have no funding: '—'."""
+    if opportunity_type in NO_FUNDING_TYPES:
+        return DASH
+    return label(funding).capitalize()
+
+
+FRAGMENT_WORDS = 5  # long quotes are found by their first and last 5 words
+
+
+def _fragment_part(text: str) -> str:
+    # quote() leaves "-" alone, but in a text fragment "-" has a meaning, so encode it too.
+    return quote(text, safe="").replace("-", "%2D")
+
+
+def quote_link(url: str, text: str) -> str:
+    """A link that opens the page and highlights the quote (a "text fragment", supported by
+    Chrome, Edge and Safari; other browsers just open the page)."""
+    words = text.strip().strip('"').split()
+    if not words:
+        return url
+    base = url.split("#", 1)[0]
+    if len(words) <= 2 * FRAGMENT_WORDS + 2:
+        target = _fragment_part(" ".join(words))
+    else:
+        start = " ".join(words[:FRAGMENT_WORDS])
+        end = " ".join(words[-FRAGMENT_WORDS:])
+        target = f"{_fragment_part(start)},{_fragment_part(end)}"
+    return f"{base}#:~:text={target}"
 
 
 def days_left(deadline: date, today: date) -> int:

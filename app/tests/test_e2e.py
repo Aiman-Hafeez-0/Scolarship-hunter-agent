@@ -79,8 +79,11 @@ def test_log_in_open_list_and_detail_then_verify(live_server: str, store: FakeSt
         expect(page.get_by_text("needs review", exact=True)).to_be_visible()  # the badge
         status = page.locator("#verify-status")
         expect(status).to_contain_text("not checked yet")
-        page.get_by_text("Show quote").first.click()
-        expect(page.get_by_text("Full tuition waiver and stipend")).to_be_visible()
+        deadlines = page.locator("#deadlines")
+        deadlines.get_by_text("Show quote").click()  # the quote folds open
+        expect(deadlines.get_by_text("The deadline is 15 January 2027.")).to_be_visible()
+        evidence = page.locator("#evidence")  # every quote, always open, with its source link
+        expect(evidence.get_by_text("Full tuition waiver and stipend")).to_be_visible()
 
         # Verify: HTMX swaps the badge without reloading the page. A full reload would wipe
         # this marker, so finding it afterwards proves the update happened in place.

@@ -2,6 +2,7 @@
     public error pages get a plain frame. Each page sets, before its blocks:
       {% set active = "overview" %}           which sidebar item is highlighted
       {% set title = "Overview" %}            the page title in the top bar
+      {% set heading_in_page = true %}        the page has its own <h1> (top bar shows a label)
       {% set crumbs = [("Opportunities", "/scholarships")] %}   parent pages, if any
     Design rules: docs/design.md. -#}
 {% from "components/icons.html" import icon %}
@@ -60,7 +61,12 @@
             </ol>
           </nav>
           {%- endif %}
+          {%- if heading_in_page | default(false) %}
+          {#- The page shows its own big heading (the detail page); here just a short label. -#}
+          <p class="line-clamp-1 text-section break-words text-slate-900 dark:text-white" title="{{ title }}">{{ title }}</p>
+          {%- else %}
           <h1 class="line-clamp-2 text-lg font-bold tracking-tight break-words text-slate-900 sm:line-clamp-1 sm:text-title dark:text-white" title="{{ title }}">{{ title }}</h1>
+          {%- endif %}
         </div>
 
         <form method="get" action="/scholarships" role="search" class="relative hidden w-64 shrink-0 md:block xl:w-80">

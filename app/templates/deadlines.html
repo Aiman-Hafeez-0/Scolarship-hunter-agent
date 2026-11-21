@@ -1,30 +1,132 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon %}
+{% from "components/badges.html" import TONES, type_badge %}
 {% from "components/cards.html" import card, SURFACE %}
 {% from "components/empty.html" import empty_state %}
 {% from "_parts.html" import deadline_row %}
 {% set active = "deadlines" %}
 {% set title = "Deadlines" %}
-{% block content %}
-<p class="-mt-2 mb-5 max-w-2xl text-body text-slate-600 dark:text-slate-400">
-  {%- if total %}{{ total }} upcoming deadline{{ '' if total == 1 else 's' }} of open opportunities, soonest first. Red means 7 days or less, amber 30 days or less.
-  {%- else %}Upcoming deadlines of open opportunities, soonest first.{% endif -%}
-</p>
+{% set TYPE_TEXT = {"": "All", "scholarship": "Scholarship", "admission": "Admission", "entry_test": "Entry test"} %}
 
-{%- if months %}
+{#- A link to this page with the view, type or month changed. -#}
+{% macro here(new_view=none, new_kind=none, new_month=none) -%}
+{%- set v = view if new_view is none else new_view -%}
+{%- set k = kind if new_kind is none else new_kind -%}
+{%- set m = month_param if new_month is none else new_month -%}
+/deadlines?view={{ v }}{% if k %}&amp;type={{ k }}{% endif %}{% if v == "calendar" %}&amp;month={{ m }}{% endif %}
+{%- endmacro %}
+
+{% macro entry_chip(d) -%}
+{%- set t = tone(days_left(d.deadline_date, today)) -%}
+<a href="/scholarships/{{ d.scholarship_id }}" title="{{ d.scholarship_name }} · {{ d.label }}"
+   class="block truncate rounded-md px-1.5 py-0.5 text-[0.75rem] leading-5 font-semibold ring-1 ring-inset hover:underline {{ TONES[t] }}">{{ d.scholarship_name }}</a>
+{%- endmacro %}
+
+{% block content %}
+<div class="-mt-2 mb-5 flex flex-col gap-4">
+  <p class="max-w-2xl text-body text-slate-600 dark:text-slate-400">Upcoming deadlines of open opportunities. Red means 7 days or less, amber 30 days or less.</p>
+
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <nav aria-label="Filter by type" class="flex flex-wrap gap-2">
+      {%- for value, text in TYPE_TEXT.items() %}
+      {%- set count = total if not value else counts[value] %}
+      <a href="{{ here(new_kind=value) }}"{% if kind == value %} aria-current="true"{% endif %}
+         class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-small whitespace-nowrap ring-1 ring-inset transition-colors
+                {{ 'bg-teal-700 text-white ring-teal-700 dark:bg-teal-400 dark:text-slate-950 dark:ring-teal-400' if kind == value else 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800' }}">
+        {{ text }}<span class="tabular-nums opacity-80">{{ count }}</span>
+      </a>
+      {%- endfor %}
+    </nav>
+
+    <nav aria-label="View" class="inline-flex self-start rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+      {%- for value, text, ic in [("list", "By week", "list-checks"), ("calendar", "Calendar", "calendar")] %}
+      <a href="{{ here(new_view=value) }}"{% if view == value %} aria-current="page"{% endif %}
+         class="inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-small {{ 'bg-white text-teal-700 shadow-xs dark:bg-slate-950 dark:text-teal-400' if view == value else 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white' }}">{{ icon(ic, "size-4") }}{{ text }}</a>
+      {%- endfor %}
+    </nav>
+  </div>
+</div>
+
+{%- if view == "list" %}
+{#- ---------- By week ---------- -#}
+{%- if shown %}
 <div class="space-y-6">
-  {%- for month in months %}
-  {% call card(month.title, flush=True, count=month.deadlines | length) %}
+  {%- for group in weeks %}
+  <section id="{{ group.key }}" aria-labelledby="{{ group.key }}-title" class="{{ SURFACE }}">
+    <header class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
+      <h2 id="{{ group.key }}-title" class="text-section">{{ group.title }}</h2>
+      <span class="rounded-full bg-slate-100 px-2 text-small tabular-nums text-slate-700 dark:bg-slate-800 dark:text-slate-300">{{ group.deadlines | length }}</span>
+      <span class="text-small font-normal text-slate-600 dark:text-slate-400">{{ group.hint }}</span>
+    </header>
+    {%- if group.deadlines %}
     <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
-      {%- for d in month.deadlines %}{{ deadline_row(d, today) }}{% endfor %}
+      {%- for d in group.deadlines %}{{ deadline_row(d, today) }}{% endfor %}
     </ul>
-  {% endcall %}
+    {%- else %}
+    <p class="border-t border-slate-100 px-4 py-4 text-body text-slate-600 sm:px-5 dark:border-slate-800 dark:text-slate-400">Nothing due {{ "this week" if group.key == "this-week" else "next week" if group.key == "next-week" else "after that yet" }}.</p>
+    {%- endif %}
+  </section>
   {%- endfor %}
 </div>
 {%- else %}
 <div class="{{ SURFACE }}">
-  {{ empty_state("calendar-clock", "No upcoming deadlines",
-                 "When a run finds a future deadline on an official page, it is listed here by month.",
-                 "Look at your sources", "/sources") }}
+  {%- if kind %}
+  {{ empty_state("calendar-clock", "No upcoming " ~ (TYPE_TEXT[kind] | lower) ~ " deadlines", "Choose “All” to see every type.", "Show all types", here(new_kind="")) }}
+  {%- else %}
+  {{ empty_state("calendar-clock", "No upcoming deadlines", "When a run finds a future deadline on an official page, it is listed here by week.", "Look at your sources", "/sources") }}
+  {%- endif %}
 </div>
+{%- endif %}
+
+{%- else %}
+{#- ---------- Month calendar ---------- -#}
+<section aria-labelledby="cal-title" class="{{ SURFACE }}">
+  <header class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5 dark:border-slate-800">
+    {%- if cal.previous %}
+    <a href="{{ here(new_month=cal.previous.strftime('%Y-%m')) }}" aria-label="Previous month" class="grid size-9 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">{{ icon("chevron-right", "size-5 rotate-180") }}</a>
+    {%- else %}<span class="size-9" aria-hidden="true"></span>{% endif %}
+    <h2 id="cal-title" class="text-section" aria-live="polite">{{ cal.title }}</h2>
+    <a href="{{ here(new_month=cal.next.strftime('%Y-%m')) }}" aria-label="Next month" class="grid size-9 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">{{ icon("chevron-right", "size-5") }}</a>
+  </header>
+
+  {#- Wide screens: the month grid. -#}
+  <div class="hidden sm:block">
+    <div class="grid grid-cols-7 border-b border-slate-100 text-center text-small text-slate-600 dark:border-slate-800 dark:text-slate-400" aria-hidden="true">
+      {%- for name in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] %}<div class="py-2">{{ name }}</div>{% endfor %}
+    </div>
+    <div class="grid grid-cols-7">
+      {%- for week in cal.weeks %}{% for c in week %}
+      <div class="min-h-28 min-w-0 border-b border-r border-slate-100 p-1.5 dark:border-slate-800 [&:nth-child(7n)]:border-r-0 {{ 'bg-slate-50/60 dark:bg-slate-950/40' if not c.in_month }}"
+           {%- if c.deadlines %} aria-label="{{ c.day | day }}: {{ c.deadlines | length }} deadline{{ '' if c.deadlines | length == 1 else 's' }}"{% endif %}>
+        <span class="inline-grid size-7 place-items-center rounded-full text-small tabular-nums
+          {{ 'bg-teal-700 text-white dark:bg-teal-400 dark:text-slate-950' if c.is_today else ('text-slate-800 dark:text-slate-200' if c.in_month else 'text-slate-400 dark:text-slate-600') }}"
+          {%- if c.is_today %} aria-current="date"{% endif %}>{{ c.day.day }}</span>
+        {%- if c.in_month and c.deadlines %}
+        <ul class="mt-1 space-y-1">{% for d in c.deadlines %}<li>{{ entry_chip(d) }}</li>{% endfor %}</ul>
+        {%- endif %}
+      </div>
+      {%- endfor %}{% endfor %}
+    </div>
+  </div>
+
+  {#- Phones: the days of this month that have a deadline. -#}
+  <div class="sm:hidden">
+    {%- if cal.busy_days %}
+    <ul class="divide-y divide-slate-100 dark:divide-slate-800">
+      {%- for c in cal.busy_days %}
+      <li class="flex gap-3 px-4 py-3">
+        <span class="w-12 shrink-0 text-center">
+          <span class="block text-[0.6875rem] font-bold uppercase text-slate-600 dark:text-slate-400">{{ c.day.strftime("%a") }}</span>
+          <span class="block text-lg font-bold tabular-nums">{{ c.day.day }}</span>
+        </span>
+        <ul class="min-w-0 flex-1 space-y-1.5">{% for d in c.deadlines %}<li>{{ entry_chip(d) }}</li>{% endfor %}</ul>
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    {{ empty_state("calendar", "Nothing this month", "No upcoming deadline falls in " ~ cal.title ~ ". Try the next month.", compact=True) }}
+    {%- endif %}
+  </div>
+</section>
 {%- endif %}
 {% endblock %}

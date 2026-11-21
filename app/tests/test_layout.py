@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 
 from app import auth
-from app.main import by_month, create_app, get_store, get_today, too_many_tries
+from app.main import create_app, get_store, get_today, too_many_tries
 from app.queries import RecentChange, UpcomingDeadline
 from app.tests.conftest import (
     SID,
@@ -54,9 +54,11 @@ def test_sidebar_highlights_the_current_page(logged_in: TestClient) -> None:
                        ("/deadlines", "Deadlines"), ("/sources", "Sources"), ("/runs", "Runs"),
                        ("/profile", "Profile")]:  # fmt: skip
         page = logged_in.get(path).text
-        current = page.split('aria-current="page"')[1].split("</a>")[0]
-        assert name in current, path
-        assert page.count('aria-current="page"') == 2  # desktop sidebar + phone drawer
+        navs = [part.split("</nav>")[0] for part in page.split('<nav aria-label="Main"')[1:]]
+        assert len(navs) == 2  # desktop sidebar + phone drawer
+        for nav in navs:
+            assert nav.count('aria-current="page"') == 1, path
+            assert name in nav.split('aria-current="page"')[1].split("</a>")[0], path
 
 
 def test_sidebar_shows_the_last_run(logged_in: TestClient, store: FakeStore) -> None:
@@ -114,7 +116,8 @@ def test_dispatch_answer_is_a_toast(logged_in: TestClient) -> None:
 
 
 def test_overview_stat_cards(logged_in: TestClient, store: FakeStore) -> None:
-    store.rows = [row(id="a"), row(id="b"), row(id="c", match_status="maybe")]
+    store.rows = [row(id="a", name="A"), row(id="b", name="B"),
+                  row(id="c", name="C", match_status="maybe")]  # fmt: skip
     store.upcoming = [_deadline(0), _deadline(14), _deadline(15)]
     store.run_rows = [run_row(started_at=datetime.now(UTC) - timedelta(hours=2))]
 
@@ -167,29 +170,6 @@ def test_overview_empty_states_are_friendly(logged_in: TestClient, store: FakeSt
 def test_overview_quick_actions(logged_in: TestClient) -> None:
     page = logged_in.get("/").text
     assert "Quick actions" in page and 'href="/sources?add=1"' in page
-
-
-# ---------- Deadlines ----------
-
-
-def test_deadlines_page_groups_by_month(logged_in: TestClient, store: FakeStore) -> None:
-    store.upcoming = [_deadline(3, "December thing"), _deadline(60, "January thing")]
-    page = logged_in.get("/deadlines").text
-    assert "November 2026" in page and "January 2027" in page
-    assert page.index("November 2026") < page.index("January 2027")
-    assert "2 upcoming deadlines" in page
-    assert 'data-tone="red"' in page  # 3 days left
-
-
-def test_deadlines_page_empty(logged_in: TestClient, store: FakeStore) -> None:
-    store.upcoming = []
-    assert "No upcoming deadlines" in logged_in.get("/deadlines").text
-
-
-def test_by_month() -> None:
-    groups = by_month([_deadline(1), _deadline(2), _deadline(45)])
-    assert [(g.title, len(g.deadlines)) for g in groups] == [("November 2026", 2),
-                                                            ("January 2027", 1)]  # fmt: skip
 
 
 # ---------- Sources slide-over ----------
