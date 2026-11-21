@@ -201,3 +201,54 @@ def test_opportunities_show_a_skeleton_while_loading(logged_in: TestClient) -> N
     page = logged_in.get("/scholarships").text
     assert 'hx-indicator="#opps"' in page and 'class="skeleton-indicator"' in page
     assert "Loading…</span>" not in page
+
+
+# ---------- Database problems are explained in the server log ----------
+
+
+def test_redact_hides_the_database_url_and_passwords() -> None:
+    from app.main import redact
+
+    url = "postgresql://postgres.abc:s3cret@db.example.com:5432/postgres"
+    assert redact(f"cannot use {url}", url) == "cannot use <DATABASE_URL>"
+    assert redact("failed for postgresql://me:pa55@h:5432/db here", None) == (
+        "failed for postgresql://me:***@h:5432/db here"
+    )
+    assert redact("plain message", "postgresql://x") == "plain message"
+
+
+def test_database_error_is_logged_but_not_shown(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import psycopg
+
+    secret_url = "postgresql://postgres:hunter2@db.example.com:5432/postgres"
+
+    class Down(FakeStore):
+        def sources(self):  # type: ignore[no-untyped-def]
+            raise psycopg.OperationalError(f'connection to "{secret_url}" failed: timeout expired')
+
+    app = create_app(make_settings(database_url=secret_url))
+    app.dependency_overrides[get_store] = lambda: Down()
+    app.dependency_overrides[get_today] = lambda: TODAY
+    use_fake_limiter(app)
+    with TestClient(app, base_url="http://localhost") as client:
+        log_in(client)
+        with caplog.at_level("WARNING", logger="app.main"):
+            page = client.get("/sources")
+
+    assert page.status_code == 503 and "timeout expired" not in page.text
+    logged = caplog.text
+    assert "GET /sources: OperationalError" in logged and "timeout expired" in logged
+    assert "hunter2" not in logged and "<DATABASE_URL>" in logged
+
+
+def test_missing_database_url_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    app = create_app(make_settings())  # no DATABASE_URL, real limiter: needs the database
+    with TestClient(app, base_url="http://localhost") as client:
+        token = csrf_from(client.get("/login").text)
+        with caplog.at_level("WARNING", logger="app.main"):
+            response = client.post("/login", data={"email": "a@b.c", "password": "x",
+                                                   "csrf_token": token})  # fmt: skip
+    assert response.status_code == 503
+    assert "POST /login: DATABASE_URL is not set" in caplog.text

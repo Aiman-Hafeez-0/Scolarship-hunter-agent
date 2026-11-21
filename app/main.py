@@ -8,6 +8,7 @@ through `require_login` (see protected = APIRouter(...) below).
 """
 
 import logging
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -170,6 +171,16 @@ def _client_key(request: Request, settings: Settings) -> str:
     return request.client.host if request.client else "unknown"
 
 
+_URL_PASSWORD = re.compile(r"(\w+://[^:/@\s]+:)[^@\s]+@")
+
+
+def redact(text: str, database_url: str | None) -> str:
+    """Text safe for the log: the database URL and any password in a URL are hidden."""
+    if database_url:
+        text = text.replace(database_url, "<DATABASE_URL>")
+    return _URL_PASSWORD.sub(r"\1***@", text).strip()
+
+
 def _wants_json(request: Request) -> bool:
     return request.url.path.startswith("/api/")
 
@@ -280,11 +291,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(DatabaseMissing)
     async def database_missing(request: Request, exc: DatabaseMissing) -> Response:
+        logger.warning("Database problem on %s %s: DATABASE_URL is not set",
+                       request.method, request.url.path)  # fmt: skip
         return await database_problem(request, "DATABASE_URL is not set. Add it to your .env file.")
 
     @app.exception_handler(psycopg.Error)
     async def database_error(request: Request, exc: psycopg.Error) -> Response:
-        # The error text may contain the connection string, so it is not shown.
+        # The error text may contain the connection string, so the page never shows it.
+        # The server log does (with any password removed), so the cause can be found.
+        settings = get_settings(request)
+        logger.warning("Database problem on %s %s: %s: %s", request.method, request.url.path,
+                       type(exc).__name__, redact(str(exc), settings.database_url))  # fmt: skip
         message = ("Could not read from the database. Try again in a minute; "
                    "if it keeps failing, check DATABASE_URL.")  # fmt: skip
         return await database_problem(request, message)
