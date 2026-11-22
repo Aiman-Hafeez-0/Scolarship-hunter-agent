@@ -6,7 +6,7 @@ from pathlib import Path
 from pipeline.models import Source
 
 PROMPTS_DIR = Path(__file__).resolve().parent
-EXTRACT_VERSION = "extract_v3"
+EXTRACT_VERSION = "extract_v4"
 
 
 def extract_system_prompt(source: Source, today: date | None = None) -> str:

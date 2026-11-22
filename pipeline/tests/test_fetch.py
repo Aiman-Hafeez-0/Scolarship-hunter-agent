@@ -4,6 +4,7 @@ import httpx
 import respx
 from fpdf import FPDF
 
+from pipeline.browser import no_browser
 from pipeline.config import Settings
 from pipeline.models import FetchStatus
 from pipeline.nodes.fetch import fetch_all
@@ -103,10 +104,13 @@ async def test_broken_pdf_fails_without_crashing(
     assert result.error
 
 
-async def test_render_js_is_skipped(mock_http: respx.MockRouter, settings: Settings) -> None:
-    [result] = await fetch_all([make_source(render_js=True)], settings)
+async def test_render_js_is_skipped_without_a_browser(
+    mock_http: respx.MockRouter, settings: Settings
+) -> None:
+    [result] = await fetch_all([make_source(render_js=True)], settings, browser_factory=no_browser)
 
     assert result.status is FetchStatus.SKIPPED_JS
+    assert result.error == "needs a browser (render_js)"
     assert not mock_http.calls  # nothing was downloaded, not even robots.txt
 
 

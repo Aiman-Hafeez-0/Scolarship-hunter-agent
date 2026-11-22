@@ -16,7 +16,7 @@ from pipeline.tests.conftest import FakeProvider, make_source
 from pipeline.text import content_hash, html_to_text, normalize
 
 TODAY = date(2026, 11, 15)
-CURRENT = {"good": "extract_v3+fake-model"}  # extracted with this prompt and model
+CURRENT = {"good": "extract_v4+fake-model"}  # extracted with this prompt and model
 PAGE_HTML = (
     "<html><body><h1>MS Admissions</h1><p>Applications for the MS programme are open."
     " The deadline is 15 January 2027.</p></body></html>"
@@ -83,7 +83,7 @@ async def test_new_page_is_extracted_validated_and_saved(
     assert outcome.fetched.change is Change.NEW
     assert outcome.saved == 1
     items, version, mark_extracted = store.saved["good"]
-    assert version == "extract_v3+fake-model"
+    assert version == "extract_v4+fake-model"
     assert mark_extracted is True
     assert not items[0].needs_review
     assert items[0].evidence[0].score == 100
@@ -120,7 +120,7 @@ async def test_force_extracts_unchanged_page(site: respx.MockRouter, settings: S
 
 @pytest.mark.parametrize(
     "stored_version",
-    [None, "extract_v2+fake-model", "extract_v3+old-model"],
+    [None, "extract_v2+fake-model", "extract_v4+old-model"],
     ids=["never-recorded", "old-prompt", "other-model"],
 )
 async def test_unchanged_page_with_outdated_version_is_extracted_again(
@@ -138,16 +138,16 @@ async def test_unchanged_page_with_outdated_version_is_extracted_again(
     assert outcome.fetched.change is Change.UNCHANGED  # the page itself did not change...
     assert outcome.outdated is True  # ...but it was extracted with another prompt or model
     assert len(provider.calls) == 1
-    assert store.saved["good"][1] == "extract_v3+fake-model"
+    assert store.saved["good"][1] == "extract_v4+fake-model"
 
 
 def test_any_model_of_the_provider_counts_as_current() -> None:
     both = FallbackProvider(FakeProvider(name="gemini"), FakeProvider(name="groq"))
 
     assert both.models == ("gemini", "groq")
-    assert not is_outdated("extract_v3+gemini", both)
-    assert not is_outdated("extract_v3+groq", both)  # fallback answer: no endless re-extracting
-    assert is_outdated("extract_v3+gemini-old", both)
+    assert not is_outdated("extract_v4+gemini", both)
+    assert not is_outdated("extract_v4+groq", both)  # fallback answer: no endless re-extracting
+    assert is_outdated("extract_v4+gemini-old", both)
     assert is_outdated("extract_v2+gemini", both)
     assert is_outdated(None, both)
 
@@ -205,7 +205,7 @@ async def test_llm_failure_flags_items_and_forgets_hash(
     await run_sources([make_source(key="good", url="https://example.edu.pk/good")],
                       settings, FakeProvider(ProviderError("quota")), store, {}, {})  # fmt: skip
 
-    assert store.saved["good"] == ([], "extract_v3+none", False)
+    assert store.saved["good"] == ([], "extract_v4+none", False)
 
 
 async def test_one_broken_source_never_stops_the_others(

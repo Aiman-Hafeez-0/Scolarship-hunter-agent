@@ -275,6 +275,15 @@ After 27 Nov 2026, change the cron line in `weekly.yml` from `"17 3 * * *"` to
 `"17 3 * * 1"`. GitHub cron times are in UTC (PKT = UTC+5), and a scheduled run can start a
 few minutes late.
 
+**JavaScript pages.** Sources with `render_js: true` (COMSATS admissions, the DAAD database)
+are empty without JavaScript, so `weekly.yml` opens them in a headless Chromium (Playwright,
+the `browser` dependency group; Chromium is cached between runs). The same rules apply:
+robots.txt for the page and for every data request it makes, the 5-second wait per site, and
+no images, fonts or style sheets are downloaded. On your computer these sources are skipped
+("needs a browser") unless you add the group and Chromium yourself: run
+`uv run --group browser playwright install chromium` once, then start the pipeline with
+`uv run --group browser python -m pipeline.run weekly` (a plain `uv run` removes the group).
+
 A third workflow, `test-email.yml` (manual only), sends one test email to `ADMIN_EMAIL` so you
 can check the mail secrets. It uses `MAIL_PROVIDER`, `RESEND_API_KEY` and `ADMIN_EMAIL` (or the
 Gmail ones).

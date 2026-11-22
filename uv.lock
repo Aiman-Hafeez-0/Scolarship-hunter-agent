@@ -2290,6 +2290,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+browser = [
+    { name = "playwright" },
+]
 dev = [
     { name = "fpdf2" },
     { name = "google-genai" },
@@ -2333,6 +2336,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+browser = [{ name = "playwright", specifier = ">=1.65.2" }]
 dev = [
     { name = "fpdf2", specifier = ">=2.9.0" },
     { name = "google-genai", specifier = ">=3.3.0" },

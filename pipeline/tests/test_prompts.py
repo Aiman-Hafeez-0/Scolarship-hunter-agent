@@ -30,10 +30,13 @@ def test_user_message_includes_feedback() -> None:
     assert "deadlines.0.evidence missing" in message
 
 
-def test_extract_v3_rules() -> None:
+def test_extract_v4_rules() -> None:
     prompt = extract_system_prompt(make_source(), today=date(2026, 11, 16))
 
-    assert EXTRACT_VERSION == "extract_v3"
+    assert EXTRACT_VERSION == "extract_v4"
+    # v4: a test calendar row gives two separate deadlines (registration and test date).
+    assert "every row has TWO deadlines" in prompt and "Never merge them" in prompt
+    assert "share that same evidence" in prompt and 'A "*" before a date' in prompt
     assert "more than 30 days before today's date" in prompt
     assert "Tables:" in prompt and "the whole row" in prompt
     assert "named in a single sentence" in prompt

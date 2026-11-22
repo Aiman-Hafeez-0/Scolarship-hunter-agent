@@ -9,7 +9,8 @@
 #   type              official (the real owner, default) | lead (only points to the owner)
 #   opportunity_type  scholarship | admission | entry_test
 #   location          abroad | pakistan
-#   render_js         true if the page needs a browser to show its content (default false)
+#   render_js         true if the page needs a browser to show its content (default false);
+#                     the weekly workflow opens it in headless Chromium, elsewhere it is skipped
 #   is_pdf            true if the url is a PDF file (default false)
 #   include_links     true = add the page's link/image URLs to its text, so a renamed file
 #                     (e.g. a new calendar PDF) counts as a change (default false)

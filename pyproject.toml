@@ -38,6 +38,11 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
+# Playwright is optional (the "browser" group): pipeline/browser.py imports it only when present.
+[[tool.mypy.overrides]]
+module = ["playwright", "playwright.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -66,7 +71,12 @@ dev = [
     "ruff>=0.17.5",
     "types-pyyaml>=6.0.12.20261113",
 ]
+# A headless browser for sources with render_js: true (pipeline/browser.py). Only the weekly
+# workflow installs it (with its Chromium). Without it those sources are skipped.
+browser = [
+    "playwright>=1.65.2",
+]
 # Browser test only (app/tests/test_e2e.py). Not installed by `uv sync`; see the README.
 e2e = [
-    "playwright>=1.65.2",
+    { include-group = "browser" },
 ]
